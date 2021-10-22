@@ -71,7 +71,9 @@ import os
 os.makedirs(args.out_dir,exist_ok=True)
 
 import pymol
-sys.path.append("/home/rdkibler/scripts/silent_tools_git/")
+
+#created syslink to silent_tools git repo
+#sys.path.append("/home/rdkibler/scripts/silent_tools_git/")
 import silent_tools
 
 from dataclasses import dataclass
