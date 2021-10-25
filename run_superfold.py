@@ -19,6 +19,12 @@ os.environ['TF_FORCE_UNIFIED_MEMORY'] = '1'
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '2.0' 
 
 
+#let's use a linkfile-like strategy for telling the script where to find stuff like data
+SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
+with open(f"{SCRIPTDIR}/alphafold_weights.pth",'r') as f:
+  ALPHAFOLD_DATADIR=f.read().strip()
+assert(os.path.exists(ALPHAFOLD_DATADIR))
+
 def validate_file(parser, path):
         """
         Check for file existance and read files first so that we can fail early before loading alphafold, etc
@@ -81,12 +87,42 @@ from dataclasses import dataclass
 import itertools
 import subprocess
 
+
+
+
+
+
+# def renumber(sele="all"):
+#         pdbstr = pymol.cmd.get_pdbstr(sele)
+#         process = subprocess.Popen(['perl',"/home/rdkibler/scripts/renum.pl"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+#         fixed_pdbstr = process.communicate(input=pdbstr.encode())[0].decode('utf-8')
+#         pymol.cmd.delete(sele)
+#         pymol.cmd.read_pdbstr(fixed_pdbstr,sele)
+
 def renumber(sele="all"):
-        pdbstr = pymol.cmd.get_pdbstr(sele)
-        process = subprocess.Popen(['perl',"/home/rdkibler/scripts/renum.pl"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        fixed_pdbstr = process.communicate(input=pdbstr.encode())[0].decode('utf-8')
-        pymol.cmd.delete(sele)
-        pymol.cmd.read_pdbstr(fixed_pdbstr,sele)
+  pdbstr = pymol.cmd.get_pdbstr(sele)
+
+  previous_resid = None
+
+
+  new_resid = 0
+  new_atomid = 1
+
+  lines = [line for line in pdbstr.split("\n") if line[:4] == "ATOM"]
+  fixed_pdbstr = ""
+
+  for line in lines:
+    resid = int(line[22:26])
+    if (resid != previous_resid):
+      new_resid += 1
+    new_line = line[:6] + f"{new_atomid: >5}" + line[11:22] + f"{str(new_resid): >4}" + line[26:]
+    previous_resid = resid
+    fixed_pdbstr += new_line + "\n"
+    new_atomid += 1
+
+  pymol.cmd.delete(sele)
+  pymol.cmd.read_pdbstr(fixed_pdbstr,sele)
+
 
 
 @dataclass(frozen=True)
@@ -250,7 +286,8 @@ from matplotlib import pyplot as plt
 plt.switch_backend('agg')
 
 import sys
-sys.path.append("/home/rdkibler/software/alphafold/")
+#shouldn't need this anymore
+#sys.path.append("/home/rdkibler/software/alphafold/")
 
 from alphafold.model import model
 from alphafold.model import config
@@ -390,7 +427,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             
             cfg.data.eval.num_ensemble = args.num_ensemble
 
-            params = data.get_model_haiku_params(model_name,data_dir="/projects/ml/alphafold")
+            params = data.get_model_haiku_params(model_name,data_dir=ALPHAFOLD_DATADIR)
             model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout)
             prev_compile_settings = compile_settings
             recompile = False
@@ -438,15 +475,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             else:
               bfactored_pdb_lines.append(line)
 
-          with open(fout_name, 'w') as f:
-            f.write("\n".join(bfactored_pdb_lines))
 
           if target.pymol_obj_name is not None:
             pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
             best_rmsd = np.inf
             #need to try all permutations of chain orderings
             chains = pymol.cmd.get_chains('temp_target')
-            
+
 
             for new_chain_order in itertools.permutations(chains,len(chains)):
               print(new_chain_order)
@@ -466,14 +501,31 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               #measure rmsd
               rmsd = pymol.cmd.align(target.pymol_obj_name + " and n. CA",'temp_target and n. CA',cycles=0)[0]
               print(rmsd)
-              best_rmsd = min(best_rmsd,rmsd)
+              if rmsd < best_rmsd:
+                best_rmsd = rmsd
+                best_chain_arrangement = new_chain_order
 
               pymol.cmd.delete("rechained_temp_target")
+
+
+            print("keeping: ",new_chain_order)
+            for chain in chains:
+              pymol.cmd.select(f"chain{chain}",f"temp_target and chain {chain}")
+
+            for old_chain,new_chain in zip(chains, new_chain_order):
+              pymol.cmd.alter(f"chain{old_chain}",f"chain='{new_chain}'")
+            pymol.cmd.alter("temp_target","segi=''")
+
+            renumber("temp_target")
+            bfactored_pdb_lines = pymol.cmd.get_pdbstr("temp_target").split("\n")
 
 
             o['rmsd_to_design'] = best_rmsd
             pymol.cmd.delete('temp_target')
             output_line += f" rmsd_to_input:{best_rmsd:0.2f}"
+
+          with open(fout_name, 'w') as f:
+            f.write("\n".join(bfactored_pdb_lines))
 
           with open('reports.txt','a') as f:
             f.write(output_line+"\n")
@@ -514,7 +566,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               pbar2.set_description(f'Running {key}')
 
               # replace model parameters
-              params = data.get_model_haiku_params(model_name, data_dir="/projects/ml/alphafold")
+              params = data.get_model_haiku_params(model_name, data_dir=ALPHAFOLD_DATADIR)
               for k in model_runner.params.keys():
                 model_runner.params[k] = params[k]
 
@@ -540,7 +592,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           # go through each model
           for num, model_name in enumerate(model_names):
             model_name = model_name+"_ptm" if args.ptm else model_name
-            params = data.get_model_haiku_params(model_name, data_dir="/projects/ml/alphafold")  
+            params = data.get_model_haiku_params(model_name, data_dir=ALPHAFOLD_DATADIR)  
             cfg = config.model_config(model_name)
             cfg.data.common.num_recycle = cfg.model.num_recycle = args.max_recycles
             cfg.model.recycle_tol = args.recycle_tol
