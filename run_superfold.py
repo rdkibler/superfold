@@ -1,15 +1,9 @@
 #!/home/rdkibler/.conda/envs/pyroml/bin/python3.8
 
-#!/software/conda/envs/SE3/bin/python
-
-
 #this is almost entirely based on krypton's stuff https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
 
-
-
-
 import argparse
-import os,sys
+import os
 #from Bio import SeqIO
 parser = argparse.ArgumentParser()
 
@@ -41,8 +35,8 @@ def validate_file(parser, path):
                 else:
                   parser.error("Only PDB files, silent files, and FASTA files are allowed. You supplied: %s" % path)
 
-
 parser.add_argument("input_files",metavar="PATH",nargs="+",type=lambda x: validate_file(parser, x),help="Paths to PDB files or FASTA files to run AlphaFold2 predictions on.")
+
 parser.add_argument("--pad_lengths",action="store_true",help="compile the model once to the longest input PDB and pad the remaining sequences. Ryan is unsure how this affects prediction accuracy, but it will speed up multiple prediction.")
 parser.add_argument("--mock_msa_depth", default=512,help="fake the msa. Default = 512. to go fast, use 1",type=int)
 parser.add_argument("--models",choices=["1","2","3","4","5","all"],default="4",nargs="+",help="Deepmind provided five sets of weights/models. You can choose any combination of models to run. The model number 5 has been found (by aivan) to perform the best on single sequences so this is the default, but using multiple models might provide you with a relevent ensemble of structures.")
@@ -53,6 +47,7 @@ parser.add_argument("--max_recycles",type=int,default=3,help="max number of time
 parser.add_argument("--recycle_tol",type=float,default=0.0,help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)")
 parser.add_argument("--show_images",action="store_true")
 parser.add_argument("--ptm",action="store_true",help="use the version of the models that output predicted TMalign score. Might be good for complexes")
+parser.add_argument("--save_intermediates",action="store_true",help="save intermediate structures between recycles. This is useful for making folding movies/trajectories")
 
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
@@ -66,6 +61,7 @@ parser.add_argument("--out_dir",type=str,default="output/",help="Directory to ou
 possible_prediction_results = ['unrelaxed_protein', 'plddt', 'mean_plddt', 'dists', 'adj', 'pae', 'pTMscore', 'recycles', 'tol']
 
 parser.add_argument("--save_prediction_results",choices=possible_prediction_results + ['all'], nargs="+",default=['mean_plddt'], help="save the data returned by AF2. Warning, this could be big! Default: [mean_plddt]")
+
 
 args = parser.parse_args()
 
@@ -85,21 +81,9 @@ import silent_tools
 from dataclasses import dataclass
 
 import itertools
-import subprocess
 
 
-
-
-
-
-# def renumber(sele="all"):
-#         pdbstr = pymol.cmd.get_pdbstr(sele)
-#         process = subprocess.Popen(['perl',"/home/rdkibler/scripts/renum.pl"], stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-#         fixed_pdbstr = process.communicate(input=pdbstr.encode())[0].decode('utf-8')
-#         pymol.cmd.delete(sele)
-#         pymol.cmd.read_pdbstr(fixed_pdbstr,sele)
-
-def renumber(sele="all"):
+def pymol_renumber(sele="all"):
   pdbstr = pymol.cmd.get_pdbstr(sele)
 
   previous_resid = None
@@ -122,6 +106,89 @@ def renumber(sele="all"):
 
   pymol.cmd.delete(sele)
   pymol.cmd.read_pdbstr(fixed_pdbstr,sele)
+
+
+
+from typing import Union, Tuple
+
+def pymol_apply_new_chains(pymol_object_name:str, new_chains:list) -> None:
+    """
+    Applies the new chains to a pymol object in the current order of chains
+
+    i.e. if the pymol object has chains A, B, C, D, and the new_chains list is D, B, A, C
+    it will turn current chain A into chain D, current chain B into chain B, 
+    ccurrent chain C into chain A, and current chain D into chain C.
+    """
+    import pymol
+
+    #first, make selections for each current chain so we don't lose track of them
+    chain_selections = []
+    for i, chain in enumerate(pymol.cmd.get_chains(pymol_object_name)):
+        chain_name = f'{pymol_object_name}_chain_{i}'
+        pymol.cmd.select(chain_name, f'{pymol_object_name} and chain {chain}')
+        chain_selections.append(chain_name)
+
+    #print(pymol.cmd.get_names('all', 0))
+
+    #now, apply the new chains
+    for chain_selection, new_chain in zip(chain_selections, new_chains):
+        pymol.cmd.alter(chain_selection, f'chain = "{new_chain}"')
+    
+    pymol.cmd.sort(pymol_object_name)
+
+def get_chain_permutations(chains:list) -> list:
+    """
+    Gets all permutations of the chains.
+    """
+    import itertools
+
+    return list(itertools.permutations(chains))
+    
+
+def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tuple[float, str]:
+    """
+    Aligns two multichain models using pymol.
+    Returns the RMSD and the aligned model.
+    """
+    import pymol
+    import random
+    import string
+
+    #generate a random prefix so we don't overwrite anything else in the pymol session
+    prefix = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(5))
+
+    temp_pymol_name = f'{prefix}_temp'
+    best_pymol_name = f'{prefix}_best'
+
+    chains = pymol.cmd.get_chains(model_pymol_name)
+
+    best_rmsd = float('inf')
+    for new_order in get_chain_permutations(chains):
+        #make a temporary object with the new order of chains
+        pymol.cmd.delete(temp_pymol_name)
+        pymol.cmd.create(temp_pymol_name, model_pymol_name)
+        pymol_apply_new_chains(temp_pymol_name, new_order)
+        rmsd = pymol.cmd.align(f'{temp_pymol_name} and n. CA', f'{reference_pymol_name} and n. CA',cycles=0)[0]
+        
+        #debug: useful to see if alignment is working
+        #print(f'{rmsd} {new_order}')
+
+        if rmsd < best_rmsd:
+            best_rmsd = rmsd
+            pymol.cmd.create(best_pymol_name, temp_pymol_name)
+
+    best_pdbstr = pymol.cmd.get_pdbstr(best_pymol_name)
+
+    #clean up
+    pymol.cmd.delete(temp_pymol_name)
+    pymol.cmd.delete(best_pymol_name)
+
+    return best_rmsd, best_pdbstr
+
+
+
+
+
 
 
 
@@ -428,7 +495,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             cfg.data.eval.num_ensemble = args.num_ensemble
 
             params = data.get_model_haiku_params(model_name,data_dir=ALPHAFOLD_DATADIR)
-            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout)
+            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates)
             prev_compile_settings = compile_settings
             recompile = False
 
@@ -478,51 +545,12 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
           if target.pymol_obj_name is not None:
             pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
-            best_rmsd = np.inf
-            #need to try all permutations of chain orderings
-            chains = pymol.cmd.get_chains('temp_target')
+            rmsd,bfactored_pdb_lines = pymol_multichain_align('temp_target',target.pymol_obj_name)
+            bfactored_pdb_lines = bfactored_pdb_lines.split("\n")
 
-
-            for new_chain_order in itertools.permutations(chains,len(chains)):
-              print(new_chain_order)
-              #make a copy
-              pymol.cmd.create("rechained_temp_target","temp_target")
-
-              #set new chain order
-              for chain in chains:
-                pymol.cmd.select(f"chain{chain}",f"rechained_temp_target and chain {chain}")
-
-              for old_chain,new_chain in zip(chains, new_chain_order):
-                pymol.cmd.alter(f"chain{old_chain}",f"chain='{new_chain}'")
-              pymol.cmd.alter("rechained_temp_target","segi=''")
-
-              renumber("rechained_temp_target")
-
-              #measure rmsd
-              rmsd = pymol.cmd.align(target.pymol_obj_name + " and n. CA",'temp_target and n. CA',cycles=0)[0]
-              print(rmsd)
-              if rmsd < best_rmsd:
-                best_rmsd = rmsd
-                best_chain_arrangement = new_chain_order
-
-              pymol.cmd.delete("rechained_temp_target")
-
-
-            print("keeping: ",new_chain_order)
-            for chain in chains:
-              pymol.cmd.select(f"chain{chain}",f"temp_target and chain {chain}")
-
-            for old_chain,new_chain in zip(chains, new_chain_order):
-              pymol.cmd.alter(f"chain{old_chain}",f"chain='{new_chain}'")
-            pymol.cmd.alter("temp_target","segi=''")
-
-            renumber("temp_target")
-            bfactored_pdb_lines = pymol.cmd.get_pdbstr("temp_target").split("\n")
-
-
-            o['rmsd_to_design'] = best_rmsd
+            o['rmsd_to_design'] = rmsd
             pymol.cmd.delete('temp_target')
-            output_line += f" rmsd_to_input:{best_rmsd:0.2f}"
+            output_line += f" rmsd_to_input:{rmsd:0.2f}"
 
           with open(fout_name, 'w') as f:
             f.write("\n".join(bfactored_pdb_lines))
@@ -573,6 +601,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               # predict
               prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed),device) #is this ok?
 
+              # debug
+              #print(dir(prediction_result))
+              #print(list(prediction_result.keys()))       
+              #print(len(prediction_result['representations']))
+              #print(list(prediction_result['representations'].keys()))
+              #print(prediction_result['representations']['structure_module'].shape)
+              
               
 
               # save results
@@ -597,7 +632,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             cfg.data.common.num_recycle = cfg.model.num_recycle = args.max_recycles
             cfg.model.recycle_tol = args.recycle_tol
             cfg.data.eval.num_ensemble = args.num_ensemble
-            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout)
+            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates)
 
             # go through each random_seed
             for seed in range(args.nstruct):
