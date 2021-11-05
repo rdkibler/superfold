@@ -1,2 +1,4 @@
 *.pyc
 *.pth
+alphafold/common/stereo_chemical_props.txt
+benchmark/

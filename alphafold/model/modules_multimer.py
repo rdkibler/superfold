@@ -180,6 +180,28 @@ def nearest_neighbor_clusters(batch, gap_agreement_weight=0.):
   agreement = jnp.einsum('mrc, nrc->nm', extra_one_hot_masked,
                          weights * msa_one_hot_masked)
 
+  # #debug
+  # print("batch")
+  # print(batch)
+
+  # print("weights")
+  # print(weights)
+  # print("msa_mask")
+  # print(msa_mask)
+  # print("msa_one_hot")
+  # print(msa_one_hot)
+  # print("extra_mask")
+  # print(extra_mask)
+  # print("extra_one_hot")
+  # print(extra_one_hot)
+  # print("msa_one_hot_masked")
+  # print(msa_one_hot_masked)
+  # print("extra_one_hot_masked")
+  # print(extra_one_hot_masked)
+  # print("agreement")
+  # print(agreement)
+
+
   cluster_assignment = jax.nn.softmax(1e3 * agreement, axis=0)
   cluster_assignment *= jnp.einsum('mr, nr->mn', msa_mask, extra_mask)
 
@@ -490,7 +512,7 @@ class AlphaFold(hk.Module):
       if hk.running_init():
         # When initializing the Haiku module, run one iteration of the
         # while_loop to initialize the Haiku modules used in `body`.
-        recycles, tol, prev = recycle_body((prev,safe_key,0, jnp.inf))
+        prev, safe_key, recycles, tol = recycle_body((prev,safe_key,0, jnp.inf))
       else:
         prev, safe_key, recycles, tol = hk.while_loop(
           lambda x: ((x[2] < num_iter) & (x[3] > self.config.recycle_tol)),

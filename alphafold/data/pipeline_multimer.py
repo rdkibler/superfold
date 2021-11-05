@@ -206,6 +206,8 @@ class DataPipeline:
     chain_msa_output_dir = os.path.join(msa_output_dir, chain_id)
     if not os.path.exists(chain_msa_output_dir):
       os.makedirs(chain_msa_output_dir)
+    
+    #make a temp file for the fasta
     with temp_fasta_file(chain_fasta_str) as chain_fasta_path:
       logging.info('Running monomer pipeline on chain %s: %s',
                    chain_id, description)
@@ -286,3 +288,86 @@ class DataPipeline:
     np_example = pad_msa(np_example, 512)
 
     return np_example
+
+
+
+
+class DataPipelineFaker:
+
+  def _process_single_chain(
+        self,
+        chain_id: str,
+        sequence: str,
+        description: str,
+        is_homomer_or_monomer: bool) -> pipeline.FeatureDict:
+      """Runs the monomer pipeline on a single chain."""
+
+      description=chain_id
+      
+      msas = [parsers.Msa([sequence],[[0]*len(sequence)],[description])]
+
+      chain_features = {}
+      sequence_features = pipeline.make_sequence_features(sequence, description,len(sequence))
+      chain_features.update(sequence_features)
+
+      all_msa_features = pipeline.make_msa_features(msas)
+      chain_features.update(all_msa_features)
+
+      # We only construct the pairing features if there are 2 or more unique
+      # sequences.
+      if not is_homomer_or_monomer:
+        #I very well could have translated this wrong
+        valid_feats = msa_pairing.MSA_FEATURES + (
+            'msa_uniprot_accession_identifiers',
+            'msa_species_identifiers',
+        )
+        pair_msa_feats = {f'{k}_all_seq': v for k, v in all_msa_features.items()
+                if k in valid_feats}
+
+        chain_features.update(pair_msa_feats)
+
+      return chain_features
+
+
+      
+
+  def process(self, input_seqs:list) -> pipeline.FeatureDict:
+
+      
+      input_descs = [""] * len(input_seqs)
+
+      chain_id_map = _make_chain_id_map(sequences=input_seqs,
+                                        descriptions=input_descs)
+    
+    
+      all_chain_features = {}
+      sequence_features = {}
+      is_homomer_or_monomer = len(set(input_seqs)) == 1
+      for chain_id, fasta_chain in chain_id_map.items():
+        if fasta_chain.sequence in sequence_features:
+          all_chain_features[chain_id] = copy.deepcopy(
+              sequence_features[fasta_chain.sequence])
+          continue
+        chain_features = self._process_single_chain(
+            chain_id=chain_id,
+            sequence=fasta_chain.sequence,
+            description=fasta_chain.description,
+            is_homomer_or_monomer=is_homomer_or_monomer)
+
+        chain_features = convert_monomer_features(chain_features,
+                                                  chain_id=chain_id)
+        all_chain_features[chain_id] = chain_features
+        sequence_features[fasta_chain.sequence] = chain_features
+
+      all_chain_features = add_assembly_features(all_chain_features)
+
+      np_example = feature_processing.pair_and_merge(
+          all_chain_features=all_chain_features,
+          is_prokaryote=True, #let's be honest with ourselves.
+      )
+
+      # Pad MSA to avoid zero-sized extra_msa.
+      #Hey Ryan, I wonder if this number could be smaller/larger/a parameter --Ryan
+      np_example = pad_msa(np_example, 512)
+
+      return np_example

@@ -179,6 +179,7 @@ def to_pdb(prot: Protein) -> str:
           f'The PDB format supports at most {PDB_MAX_CHAINS} chains.')
     chain_ids[i] = PDB_CHAIN_IDS[i]
 
+
   pdb_lines.append('MODEL     1')
   atom_index = 1
   last_chain_index = chain_index[0]
@@ -193,7 +194,6 @@ def to_pdb(prot: Protein) -> str:
       atom_index += 1  # Atom index increases at the TER symbol.
 
     res_name_3 = res_1to3(aatype[i])
-    #
     for atom_name, pos, mask, b_factor in zip(
         atom_types, atom_positions[i], atom_mask[i], b_factors[i]):
       if mask < 0.5:
