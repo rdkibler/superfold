@@ -51,8 +51,6 @@ parser.add_argument("--turbo",action="store_true",help="use the latest and great
 parser.add_argument("--max_recycles",type=int,default=3,help="max number of times to run evoformer. Default is 3. Single domain proteins need fewer runs. Multidomain or PPI may need more")
 parser.add_argument("--recycle_tol",type=float,default=0.0,help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)")
 parser.add_argument("--show_images",action="store_true")
-# parser.add_argument("--ptm",action="store_true",help="use the version of the models that output predicted TMalign score. Incompatible with 'multimer' mode.")
-# parser.add_argument("--multimer",action="store_true",help="Use the Alphafold-Multimer module and weights. Incompatible with 'ptm' mode.")
 parser.add_argument("--save_intermediates",action="store_true",help="save intermediate structures between recycles. This is useful for making folding movies/trajectories")
 
 parser.add_argument("--amber_relax",action="store_true",help="use AMBER to relax the structure after prediction")
@@ -61,7 +59,7 @@ parser.add_argument("--amber_relax",action="store_true",help="use AMBER to relax
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
 
 parser.add_argument("--enable_dropout",action="store_true",help="Introduce structural diversity by enabling dropout")
-parser.add_argument("--pct_seq_mask", type=float,default=0.15,help="percent of sequence to make during inference. Default = 15% (0.15). Setting to 0 might reduce prediction stocasticity.")
+parser.add_argument("--pct_seq_mask", type=float,default=0.15,help="percent of sequence to make during inference. Default = 0.15. Setting to 0 might reduce prediction stocasticity.")
 #parser.add_argument("--deepaccnet",action="store_true",help="Run DeepAccNet on the AlphaFold2 outputs.")
 
 parser.add_argument("--out_dir",type=str,default="output/",help="Directory to output models and data.")
@@ -81,7 +79,6 @@ import silent_tools
 from dataclasses import dataclass
 from typing import Union, Tuple, Dict
 import numpy as np
-import pickle
 from matplotlib import pyplot as plt
 plt.switch_backend('agg')
 
@@ -543,7 +540,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             bfactored_relaxed_pdb_lines = []
             bfac = o['plddt']/100
 
-            for line in protein.to_pdb(relaxed_pdb_str).split("\n"):
+            for line in relaxed_pdb_str.split("\n"):
               if line[0:6] == "ATOM  ":
                 seq_id_now = int(line[23:26].strip()) - 1
                 if seq_id_now != seq_id_then:
