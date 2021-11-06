@@ -63,15 +63,9 @@ parser.add_argument("--pct_seq_mask", type=float,default=0.15,help="percent of s
 #parser.add_argument("--deepaccnet",action="store_true",help="Run DeepAccNet on the AlphaFold2 outputs.")
 
 parser.add_argument("--out_dir",type=str,default="output/",help="Directory to output models and data.")
-possible_prediction_results = ['unrelaxed_protein', 'plddt', 'mean_plddt', 'dists', 'adj', 'pae', 'pTMscore', 'recycles', 'tol']
-
-parser.add_argument("--save_prediction_results",choices=possible_prediction_results + ['all'], nargs="+",default=['mean_plddt'], help="save the data returned by AF2. Warning, this could be big! Default: [mean_plddt]")
 
 args = parser.parse_args()
 
-#this could be improved
-if "all" in args.save_prediction_results:
-  args.save_prediction_results = possible_prediction_results
 
 import os
 import pymol
@@ -483,42 +477,40 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         def report(key):
           pbar2.update(n=1)
           o = outs[key]
+          out_dict = {}
+          out_dict['mean_pddt'] = o['mean_plddt']
+          if args.type == "ptm":
+            # out_dict['pae'] = o['pae']
+            out_dict['pTMscore'] = o['pTMscore']
+          elif args.type == "multimer":
+            out_dict['ptm'] = o['pTMscore']
+            out_dict['iptm'] = o['iptm']
+          out_dict['recycles'] = o['recycles']
+          out_dict['tol'] = o['tol']
+          out_dict['model'] = key.split("_")[1]
+          out_dict['type'] = args.type
+          out_dict['seed'] = key.split("_")[-1]
 
           output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
           if args.type == "ptm" or args.type == 'multimer': output_line += f" pTMscore:{o['pTMscore']:.2f}"
 
-          prefix = f"{name}_{key}_recycle_{o['recycles']}" 
+          prefix = f"{name}_{key}" 
           fout_name = os.path.join(args.out_dir,f'{prefix}_unrelaxed.pdb')
 
-
-          #add bfactor. suggested by drhicks
-          seq_id = -1
-          seq_id_then = ""
-          bfactored_pdb_lines = []
-          bfac = o['plddt']/100
-
-          for line in protein.to_pdb(o["unrelaxed_protein"]).split("\n"):
-            if line[0:6] == "ATOM  ":
-              seq_id_now = int(line[23:26].strip()) - 1
-              if seq_id_now != seq_id_then:
-                seq_id += 1
-              bfactored_pdb_lines.append("{before_section}{bfac:6.2f}{after_section}".format(before_section=line[:60], bfac=bfac[seq_id], after_section=line[66:]))
-              seq_id_then = int(line[23:26].strip()) - 1
-            else:
-              bfactored_pdb_lines.append(line)
-
+          output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
 
           if target.pymol_obj_name is not None:
-            pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
-            rmsd,bfactored_pdb_lines = pymol_multichain_align('temp_target',target.pymol_obj_name)
-            bfactored_pdb_lines = bfactored_pdb_lines.split("\n")
+            #pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
+            pymol.cmd.read_pdbstr(output_pdbstr,oname='temp_target')
+            rmsd,output_pdbstr = pymol_multichain_align('temp_target',target.pymol_obj_name)
 
-            o['rmsd_to_design'] = rmsd
+
+            out_dict['rmsd_to_input'] = rmsd
             pymol.cmd.delete('temp_target')
             output_line += f" rmsd_to_input:{rmsd:0.2f}"
 
           with open(fout_name, 'w') as f:
-            f.write("\n".join(bfactored_pdb_lines))
+            f.write("\n".join(output_pdbstr))
 
           with open('reports.txt','a') as f:
             f.write(output_line+"\n")
@@ -534,32 +526,33 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             # Relax the prediction.
             relaxed_pdb_str, _, _ = amber_relaxer.process(prot=o["unrelaxed_protein"])
 
-            #inject bfactor
-            seq_id = -1
-            seq_id_then = ""
-            bfactored_relaxed_pdb_lines = []
-            bfac = o['plddt']/100
+            # #inject bfactor
+            # seq_id = -1
+            # seq_id_then = ""
+            # bfactored_relaxed_pdb_lines = []
+            # bfac = o['plddt']/100
 
-            for line in relaxed_pdb_str.split("\n"):
-              if line[0:6] == "ATOM  ":
-                seq_id_now = int(line[23:26].strip()) - 1
-                if seq_id_now != seq_id_then:
-                  seq_id += 1
-                bfactored_relaxed_pdb_lines.append("{before_section}{bfac:6.2f}{after_section}".format(before_section=line[:60], bfac=bfac[seq_id], after_section=line[66:]))
-                seq_id_then = int(line[23:26].strip()) - 1
-              else:
-                bfactored_relaxed_pdb_lines.append(line)
+            # for line in relaxed_pdb_str.split("\n"):
+            #   if line[0:6] == "ATOM  ":
+            #     seq_id_now = int(line[23:26].strip()) - 1
+            #     if seq_id_now != seq_id_then:
+            #       seq_id += 1
+            #     bfactored_relaxed_pdb_lines.append("{before_section}{bfac:6.2f}{after_section}".format(before_section=line[:60], bfac=bfac[seq_id], after_section=line[66:]))
+            #     seq_id_then = int(line[23:26].strip()) - 1
+            #   else:
+            #     bfactored_relaxed_pdb_lines.append(line)
 
             # Save the relaxed PDB.
             relaxed_output_path = os.path.join(
                 args.out_dir, f'relaxed_{model_name}.pdb')
             with open(relaxed_output_path, 'w') as f:
-              f.write("\n".join(bfactored_relaxed_pdb_lines))
+              f.write("\n".join(relaxed_pdb_str))
 
-
-          out_dict = {k:o[k] for k in args.save_prediction_results}
-
-          np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
+          #np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
+          import json
+          #output as nicely formatted json
+          with open(os.path.join(args.out_dir,f'{prefix}_prediction_results.json'),'w') as f:
+            json.dump(out_dict,f,indent=2)
 
 
         #######################################################################
