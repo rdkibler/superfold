@@ -526,22 +526,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             # Relax the prediction.
             relaxed_pdb_str, _, _ = amber_relaxer.process(prot=o["unrelaxed_protein"])
 
-            # #inject bfactor
-            # seq_id = -1
-            # seq_id_then = ""
-            # bfactored_relaxed_pdb_lines = []
-            # bfac = o['plddt']/100
-
-            # for line in relaxed_pdb_str.split("\n"):
-            #   if line[0:6] == "ATOM  ":
-            #     seq_id_now = int(line[23:26].strip()) - 1
-            #     if seq_id_now != seq_id_then:
-            #       seq_id += 1
-            #     bfactored_relaxed_pdb_lines.append("{before_section}{bfac:6.2f}{after_section}".format(before_section=line[:60], bfac=bfac[seq_id], after_section=line[66:]))
-            #     seq_id_then = int(line[23:26].strip()) - 1
-            #   else:
-            #     bfactored_relaxed_pdb_lines.append(line)
-
             # Save the relaxed PDB.
             relaxed_output_path = os.path.join(
                 args.out_dir, f'relaxed_{model_name}.pdb')
