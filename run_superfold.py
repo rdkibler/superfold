@@ -403,6 +403,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         if "ptm" in prediction_result:
           out.update({"pae": prediction_result['predicted_aligned_error'],
                       "pTMscore": prediction_result['ptm']})
+        if args.type == "multimer":
+          out.update({"pTMscore": prediction_result['ptm'],
+                      "pae": prediction_result['predicted_aligned_error'],
+                      "iptm": prediction_result['iptm']})
         return out
 
 
@@ -478,7 +482,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           pbar2.update(n=1)
           o = outs[key]
           out_dict = {}
-          out_dict['mean_pddt'] = o['mean_plddt']
+          out_dict['mean_plddt'] = o['mean_plddt']
           if args.type == "ptm":
             # out_dict['pae'] = o['pae']
             out_dict['pTMscore'] = o['pTMscore']
@@ -510,7 +514,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             output_line += f" rmsd_to_input:{rmsd:0.2f}"
 
           with open(fout_name, 'w') as f:
-            f.write("\n".join(output_pdbstr))
+            f.write(output_pdbstr)
 
           with open('reports.txt','a') as f:
             f.write(output_line+"\n")
@@ -530,9 +534,15 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             relaxed_output_path = os.path.join(
                 args.out_dir, f'relaxed_{model_name}.pdb')
             with open(relaxed_output_path, 'w') as f:
-              f.write("\n".join(relaxed_pdb_str))
+              f.write(relaxed_pdb_str)
+
 
           #np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
+
+          #cast devicearray to serializable type
+          for key in out_dict:
+              out_dict[key] = np.array(out_dict[key]).tolist()
+
           import json
           #output as nicely formatted json
           with open(os.path.join(args.out_dir,f'{prefix}_prediction_results.json'),'w') as f:
