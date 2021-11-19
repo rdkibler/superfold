@@ -1,7 +1,8 @@
 #!/home/rdkibler/.conda/envs/pyroml/bin/python3.8
 
 #this is almost entirely based on krypton's stuff https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
-
+import time
+time_checkpoint = time.time()
 import argparse
 import os
 #from Bio import SeqIO
@@ -75,17 +76,12 @@ from typing import Union, Tuple, Dict
 import numpy as np
 from matplotlib import pyplot as plt
 plt.switch_backend('agg')
-
-
+import time
 
 os.makedirs(args.out_dir,exist_ok=True)
 
-def pymol_renumber(sele="all"):
-  pdbstr = pymol.cmd.get_pdbstr(sele)
-
+def renumber(pdbstr):
   previous_resid = None
-
-
   new_resid = 0
   new_atomid = 1
 
@@ -100,6 +96,12 @@ def pymol_renumber(sele="all"):
     previous_resid = resid
     fixed_pdbstr += new_line + "\n"
     new_atomid += 1
+  return fixed_pdbstr
+
+def pymol_renumber(sele="all"):
+  pdbstr = pymol.cmd.get_pdbstr(sele)
+
+  fixed_pdbstr = renumber(pdbstr)
 
   pymol.cmd.delete(sele)
   pymol.cmd.read_pdbstr(fixed_pdbstr,sele)
@@ -176,6 +178,25 @@ def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tu
     pymol.cmd.delete(best_pymol_name)
 
     return best_rmsd, best_pdbstr
+
+
+def convert_pdb_chainbreak_to_new_chain(pdbstring):
+  previous_resid = 0
+  chain_num = 0
+  new_pdbstring = ""
+  import string
+  alphabet = string.ascii_uppercase
+  for line in pdbstring.split("\n"):
+    if line[:4] == "ATOM":
+      resid = int(line[22:26])
+      if (resid - previous_resid > 1):
+        chain_num += 1
+      new_pdbstring += line[:21] + f"{alphabet[chain_num]: >1}" + line[22:] + "\n"
+      previous_resid = resid
+    else:
+      new_pdbstring += line + "\n"
+  return new_pdbstring
+
 
 @dataclass(frozen=True)
 class PredictionTarget:
@@ -426,7 +447,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           if args.type == "multimer":
             model_name = "model_5_multimer"
           else:
-            model_name = "model_5_ptm" if args.type == "ptm" else "model_5"
+            model_name = "model_5_ptm" if args.type == "monomer_ptm" else "model_5"
 
           N = len(feature_dict["msa"])
           L = len(feature_dict["residue_index"])
@@ -483,7 +504,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           o = outs[key]
           out_dict = {}
           out_dict['mean_plddt'] = o['mean_plddt']
-          if args.type == "ptm":
+          if args.type == "monomer_ptm":
             # out_dict['pae'] = o['pae']
             out_dict['pTMscore'] = o['pTMscore']
           elif args.type == "multimer":
@@ -496,12 +517,14 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           out_dict['seed'] = key.split("_")[-1]
 
           output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
-          if args.type == "ptm" or args.type == 'multimer': output_line += f" pTMscore:{o['pTMscore']:.2f}"
+          if args.type == "monomer_ptm" or args.type == 'multimer': output_line += f" pTMscore:{o['pTMscore']:.2f}"
 
           prefix = f"{name}_{key}" 
           fout_name = os.path.join(args.out_dir,f'{prefix}_unrelaxed.pdb')
 
           output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
+          output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
+          output_pdbstr = renumber(output_pdbstr)
 
           if target.pymol_obj_name is not None:
             #pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
@@ -516,9 +539,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           with open(fout_name, 'w') as f:
             f.write(output_pdbstr)
 
-          with open('reports.txt','a') as f:
-            f.write(output_line+"\n")
-          print(output_line)
+          
 
           if args.show_images:
             fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
@@ -545,9 +566,19 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
           import json
           #output as nicely formatted json
+          global time_checkpoint
+          elapsed_time = time.time() - time_checkpoint
+          output_line += f" elapsed time (s): {elapsed_time}"
+          with open('reports.txt','a') as f:
+            f.write(output_line+"\n")
+          print(output_line)
+
+          out_dict['elapsed_time'] = elapsed_time
+
           with open(os.path.join(args.out_dir,f'{prefix}_prediction_results.json'),'w') as f:
             json.dump(out_dict,f,indent=2)
 
+          time_checkpoint = time.time()
 
         #######################################################################
 
@@ -562,7 +593,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             # go through each model
             for num, model_name in enumerate(model_names):
               model_mod = ""
-              if args.type == "ptm":
+              if args.type == "monomer_ptm":
                 model_mod = "_ptm"
               elif args.type == "multimer":
                 model_mod = "_multimer"
@@ -590,7 +621,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           # go through each model
           for num, model_name in enumerate(model_names):
             model_mod = ""
-            if args.type == "ptm":
+            if args.type == "monomer_ptm":
               model_mod = "_ptm"
             elif args.type == "multimer":
               model_mod = "_multimer"
