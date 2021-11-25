@@ -131,6 +131,30 @@ def pymol_apply_new_chains(pymol_object_name:str, new_chains:list) -> None:
     
     pymol.cmd.sort(pymol_object_name)
 
+def get_chain_range_map(pdbstr):
+  #load into pymol
+  pymol.cmd.read_pdbstr(pdbstr,'chain_range_map_obj')
+              
+  space = {'chain_letters':[]}
+  #iterate over residues
+  pymol.cmd.iterate('chain_range_map_obj and n. CA', 'chain_letters.append(chain)', space=space)
+  #save indices where chains start and stop
+  
+  prev_chain = "A"
+  chain_start = 0
+  chain_range_map = {}
+  for i,residue_chain in enumerate(space['chain_letters']):
+    if residue_chain != prev_chain:
+      chain_stop = i
+      chain_range_map[prev_chain] = (chain_start, chain_stop)
+      chain_start = i
+    prev_chain = residue_chain
+  chain_stop = i
+  chain_range_map[prev_chain] = (chain_start, chain_stop)
+  #clean up
+  pymol.cmd.delete('chain_range_map_obj')
+  return chain_range_map  
+
 def get_chain_permutations(chains:list) -> list:
     """
     Gets all permutations of the chains.
@@ -139,7 +163,7 @@ def get_chain_permutations(chains:list) -> list:
 
     return list(itertools.permutations(chains))
     
-def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tuple[float, str]:
+def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tuple[float, str, list]:
     """
     Aligns two multichain models using pymol.
     Returns the RMSD and the aligned model.
@@ -157,6 +181,7 @@ def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tu
     chains = pymol.cmd.get_chains(model_pymol_name)
 
     best_rmsd = float('inf')
+    best_order = None
     for new_order in get_chain_permutations(chains):
         #make a temporary object with the new order of chains
         pymol.cmd.delete(temp_pymol_name)
@@ -168,6 +193,7 @@ def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tu
         #print(f'{rmsd} {new_order}')
 
         if rmsd < best_rmsd:
+            best_order = new_order
             best_rmsd = rmsd
             pymol.cmd.create(best_pymol_name, temp_pymol_name)
 
@@ -177,7 +203,7 @@ def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tu
     pymol.cmd.delete(temp_pymol_name)
     pymol.cmd.delete(best_pymol_name)
 
-    return best_rmsd, best_pdbstr
+    return best_rmsd, best_pdbstr, best_order
 
 
 def convert_pdb_chainbreak_to_new_chain(pdbstring):
@@ -499,17 +525,16 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         #cf.clear_mem(device)   #is this ok?
 
         #######################################################################
+
+        
+
+
         def report(key):
           pbar2.update(n=1)
           o = outs[key]
           out_dict = {}
           out_dict['mean_plddt'] = o['mean_plddt']
-          if args.type == "monomer_ptm":
-            # out_dict['pae'] = o['pae']
-            out_dict['pTMscore'] = o['pTMscore']
-          elif args.type == "multimer":
-            out_dict['ptm'] = o['pTMscore']
-            out_dict['iptm'] = o['iptm']
+          
           out_dict['recycles'] = o['recycles']
           out_dict['tol'] = o['tol']
           out_dict['model'] = key.split("_")[1]
@@ -526,20 +551,67 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
           output_pdbstr = renumber(output_pdbstr)
 
+          import string
+          alphabet = string.ascii_uppercase
+          chain_range_map = get_chain_range_map(output_pdbstr)
+          num_chains = len(chain_range_map)
           if target.pymol_obj_name is not None:
             #pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
             pymol.cmd.read_pdbstr(output_pdbstr,oname='temp_target')
-            rmsd,output_pdbstr = pymol_multichain_align('temp_target',target.pymol_obj_name)
+            rmsd,output_pdbstr,final_chain_order = pymol_multichain_align('temp_target',target.pymol_obj_name)
 
 
             out_dict['rmsd_to_input'] = rmsd
             pymol.cmd.delete('temp_target')
             output_line += f" rmsd_to_input:{rmsd:0.2f}"
+          else:
+            final_chain_order = alphabet[:num_chains].split()
 
           with open(fout_name, 'w') as f:
             f.write(output_pdbstr)
 
-          
+          final_chain_order_mapping = {old_chain:new_chain for old_chain,new_chain in zip(alphabet,final_chain_order)}
+          print(final_chain_order_mapping)
+
+          import itertools
+          if args.type == "monomer_ptm":
+            #calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
+            pae = o['pae']
+            interaction_paes = []
+            for chain_1,chain_2 in itertools.permutations(final_chain_order,2):
+              chain_1_range_start,chain_1_range_stop = chain_range_map[chain_1]
+              chain_2_range_start,chain_2_range_stop = chain_range_map[chain_2]
+
+              final_chain_1 = final_chain_order_mapping[chain_1]
+              final_chain_2 = final_chain_order_mapping[chain_2]
+              interaction_pae = np.mean(pae[chain_1_range_start:chain_1_range_stop,chain_2_range_start:chain_2_range_stop])
+              interaction_paes.append(interaction_pae)
+              out_dict[f"mean_pae_interaction_{final_chain_1}{final_chain_2}"] = interaction_pae
+
+            #average all the interaction PAEs
+            out_dict['mean_pae_interaction'] = np.mean(interaction_paes)
+
+            #calculate mean intra-chain PAE per chain
+            intra_chain_paes = []
+            for chain in alphabet[:num_chains]:
+              chain_range_start,chain_range_stop = chain_range_map[chain]
+              intra_chain_pae = np.mean(pae[chain_range_start:chain_range_stop,chain_range_start:chain_range_stop])
+              intra_chain_paes.append(intra_chain_pae)
+              out_dict[f"mean_pae_intra_chain_{chain}"] = intra_chain_pae
+            
+            #average all the intrachain PAEs
+            out_dict['mean_pae_intra_chain'] = np.mean(intra_chain_paes)
+            
+            #average all the PAEs
+            out_dict['mean_pae'] = np.mean(pae)
+
+
+            out_dict['pTMscore'] = o['pTMscore']
+          elif args.type == "multimer":
+            out_dict['ptm'] = o['pTMscore']
+            out_dict['iptm'] = o['iptm']
+
+
 
           if args.show_images:
             fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
@@ -556,6 +628,8 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 args.out_dir, f'relaxed_{model_name}.pdb')
             with open(relaxed_output_path, 'w') as f:
               f.write(relaxed_pdb_str)
+
+
 
 
           #np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
