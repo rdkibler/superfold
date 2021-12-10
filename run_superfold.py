@@ -42,19 +42,21 @@ parser.add_argument("input_files",metavar="PATH",nargs="+",type=lambda x: valida
 parser.add_argument("--pad_lengths",action="store_true",help="compile the model once to the longest input PDB and pad the remaining sequences. Ryan is unsure how this affects prediction accuracy, but it will speed up multiple prediction.")
 parser.add_argument("--mock_msa_depth", default=512,help="fake the msa. Default = 512. to go fast, use 1",type=int)
 parser.add_argument("--models",choices=["1","2","3","4","5","all"],default="4",nargs="+",help="Deepmind provided five sets of weights/models. You can choose any combination of models to run. The model number 5 has been found (by aivan) to perform the best on single sequences so this is the default, but using multiple models might provide you with a relevent ensemble of structures.")
-parser.add_argument("--type", choices=['monomer','monomer_ptm','multimer'] ,default="monomer",help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. The use of multimer weights with standard AF2 probably won't work")
+parser.add_argument("--type", choices=['monomer','monomer_ptm','multimer'] ,default="monomer_ptm",help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. The use of multimer weights with standard AF2 probably won't work")
 parser.add_argument("--version",choices=["monomer","multimer"],default="monomer",help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' version is equivalent to AF2-Multimer and should not be used with the monomer weight types.")
 
 
-parser.add_argument("--nstruct",type=int,help="Number of independent outputs to generate PER MODEL. Each starts with a different predetermined seed. Default=1", default=1)
+parser.add_argument("--nstruct",help="Number of independent outputs to generate PER MODEL. It will make predictions with seeds starting at 'seed_start' and increasing by one until n outputs are generated (like seed_range = range(seed_start,seed_start + nstruct)). Default=1",default=1,type=int)
+parser.add_argument("--seed_start",type=int,help="Seed to start at. Default=0",default=0)
 parser.add_argument("--num_ensemble",type=int,default=1,help="number of times to process the input features and combine. default = 1. Deepmind used 8 for casp. Expert Option.")
 parser.add_argument("--turbo",action="store_true",help="use the latest and greatest hacks to make it run fast fast fast.")
 parser.add_argument("--max_recycles",type=int,default=3,help="max number of times to run evoformer. Default is 3. Single domain proteins need fewer runs. Multidomain or PPI may need more")
 parser.add_argument("--recycle_tol",type=float,default=0.0,help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)")
 parser.add_argument("--show_images",action="store_true")
 parser.add_argument("--save_intermediates",action="store_true",help="save intermediate structures between recycles. This is useful for making folding movies/trajectories")
-
 parser.add_argument("--amber_relax",action="store_true",help="use AMBER to relax the structure after prediction")
+parser.add_argument("--overwrite",action="store_true",help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.")
+parser.add_argument("--initial_guess",action="store_true",help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation.")
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
@@ -352,7 +354,7 @@ import tqdm
 import jax
 from jax.lib import xla_bridge
 device = xla_bridge.get_backend().platform
-print(device)
+print("using ",device)
 
 
 if args.amber_relax:
@@ -371,10 +373,21 @@ if args.amber_relax:
       max_outer_iterations=RELAX_MAX_OUTER_ITERATIONS)
 
 
+longest = max([len(tgt) for tgt in query_targets])
+
+if longest < 400 and device != "cpu":
+  #catch the user's eye
+  plural = "s are" if len(query_targets) > 1 else " is"
+  print("=======================================================================================")
+  print(f"WARNING: Your query{plural} shorter than 400 residues. This is a very small protein.")
+  print("You may want to use the CPU to conserve GPU resources for those who need them.")
+  print("Remember that you can launch far more jobs in parallel on CPUs than you can on GPUs...")
+  print("See this example of how prediction time scales on CPU vs GPU: ")
+  print("https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY")
+  print("=======================================================================================")
 
 if args.pad_lengths:
   #I don't htink this is the best implememntation wrt the use of "U" to pad
-  longest = max([len(tgt) for tgt in query_targets])
   query_targets = [tgt.padseq(longest - len(tgt)) for tgt in query_targets]
 
 
@@ -389,6 +402,122 @@ if args.pad_lengths:
   assert(len(lengths) == 1)
 
 prev_compile_settings = tuple()
+
+
+seed_range = list(range(args.seed_start,args.seed_start + args.nstruct))
+
+#initial guess and multimer are not compatible
+if args.initial_guess and args.version == "multimer":
+  print("WARNING: initial guess and multimer are not compatible. ")
+  exit(1)
+
+
+#######################################################################################################################
+# Adapted from code by Nate Bennett for providing initial guess for the alphafold model
+import jax.numpy as jnp
+from alphafold.common import residue_constants
+from alphafold.data import templates
+import collections
+def af2_get_atom_positions( pymol_object_name ) -> Tuple[np.ndarray, np.ndarray]:
+  """Gets atom positions and mask."""
+
+  lines = pymol.cmd.get_pdbstr( pymol_object_name ).splitlines()
+
+  # indices of residues observed in the structure
+  idx_s = [int(l[22:26]) for l in lines if l[:4]=="ATOM" and l[12:16].strip()=="CA"]
+  num_res = len(idx_s)
+
+  all_positions = np.zeros([num_res, residue_constants.atom_type_num, 3])
+  all_positions_mask = np.zeros([num_res, residue_constants.atom_type_num],
+                                dtype=np.int64)
+
+  residues = collections.defaultdict(list)
+  # 4 BB + up to 10 SC atoms
+  xyz = np.full((len(idx_s), 14, 3), np.nan, dtype=np.float32)
+  for l in lines:
+    if l[:4] != "ATOM":
+        continue
+    resNo, atom, aa = int(l[22:26]), l[12:16], l[17:20]
+
+    residues[ resNo ].append( ( atom.strip(), aa, [float(l[30:38]), float(l[38:46]), float(l[46:54])] ) )
+
+  for resNo in residues:
+    pos = np.zeros([residue_constants.atom_type_num, 3], dtype=np.float32)
+    mask = np.zeros([residue_constants.atom_type_num], dtype=np.float32)
+
+    for atom in residues[ resNo ]:
+      atom_name = atom[0]
+      x, y, z = atom[2]
+      if atom_name in residue_constants.atom_order.keys():
+        pos[residue_constants.atom_order[atom_name]] = [x, y, z]
+        mask[residue_constants.atom_order[atom_name]] = 1.0
+      elif atom_name.upper() == 'SE' and res.get_resname() == 'MSE':
+        # Put the coordinates of the selenium atom in the sulphur column.
+        pos[residue_constants.atom_order['SD']] = [x, y, z]
+        mask[residue_constants.atom_order['SD']] = 1.0
+
+    idx = idx_s.index(resNo) # This is the order they show up in the pdb
+    all_positions[idx] = pos
+    all_positions_mask[idx] = mask
+  # _check_residue_distances(
+  #     all_positions, all_positions_mask, max_ca_ca_distance) # AF2 checks this but if we want to allow massive truncations we don't want to check this
+
+  return all_positions, all_positions_mask
+
+
+def af2_all_atom_pymol_object_name( pymol_object_name ):
+  template_seq = "".join([line for line in pymol.cmd.get_fastastr(pymol_object_name).split() if not line.startswith(">")])
+
+  all_atom_positions, all_atom_mask = af2_get_atom_positions( pymol_object_name )
+
+  all_atom_positions = np.split(all_atom_positions, all_atom_positions.shape[0])
+
+  templates_all_atom_positions = []
+
+  # Initially fill will all zero values
+  for _ in template_seq:
+    templates_all_atom_positions.append(
+        jnp.zeros((residue_constants.atom_type_num, 3)))
+
+  for idx, i in enumerate( template_seq ):
+      templates_all_atom_positions[ idx ] = all_atom_positions[ idx ][0] # assign target indices to template coordinates
+
+
+  return jnp.array(templates_all_atom_positions)
+
+def mk_mock_template(query_sequence):
+  # mock template features
+  output_templates_sequence = []
+  output_confidence_scores = []
+  templates_all_atom_positions = []
+  templates_all_atom_masks = []
+
+  for _ in query_sequence:
+    templates_all_atom_positions.append(np.zeros((templates.residue_constants.atom_type_num, 3)))
+    templates_all_atom_masks.append(np.zeros(templates.residue_constants.atom_type_num))
+    output_templates_sequence.append('-')
+    output_confidence_scores.append(-1)
+  output_templates_sequence = ''.join(output_templates_sequence)
+  templates_aatype = templates.residue_constants.sequence_to_onehot(output_templates_sequence,
+                                                                    templates.residue_constants.HHBLITS_AA_TO_ID)
+
+  template_features = {'template_all_atom_positions': np.array(templates_all_atom_positions)[None],
+        'template_all_atom_masks': np.array(templates_all_atom_masks)[None],
+        'template_sequence': [f'none'.encode()],
+        'template_aatype': np.array(templates_aatype)[None],
+        'template_confidence_scores': np.array(output_confidence_scores)[None],
+        'template_domain_names': [f'none'.encode()],
+        'template_release_date': [f'none'.encode()]}
+
+  return template_features
+
+#######################################################################################################################
+
+
+
+
+
+
 
 with tqdm.tqdm(total=len(query_targets)) as pbar1:
   for length in lengths:
@@ -427,6 +556,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
         feature_dict['residue_index'] = cf.chain_break(feature_dict['residue_index'], Ls)
 
+        if args.initial_guess:
+          feature_dict.update(mk_mock_template(query_sequences))
+
 
 
 
@@ -462,7 +594,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
       else:
         model_names = [f"model_{model_num}" for model_num in args.models]
 
-      total = len(model_names) * args.nstruct
+      total = len(model_names) * len(seed_range)
 
 
       with tqdm.tqdm(total=total) as pbar2:
@@ -477,7 +609,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
           N = len(feature_dict["msa"])
           L = len(feature_dict["residue_index"])
-          compile_settings = (N, L, args.type, args.max_recycles, args.recycle_tol, args.num_ensemble, args.mock_msa_depth, args.enable_dropout, args.pct_seq_mask)
+          compile_settings = (N, L, args.type, args.max_recycles, args.recycle_tol, args.num_ensemble, args.mock_msa_depth, args.enable_dropout, args.pct_seq_mask, args.initial_guess)
 
           recompile = prev_compile_settings != compile_settings
 
@@ -500,18 +632,21 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               cfg.data.common.max_extra_msa = args.mock_msa_depth
               cfg.data.eval.masked_msa_replace_fraction = args.pct_seq_mask
               cfg.data.common.num_recycle = args.max_recycles
-
-            # set size of msa (to reduce memory requirements)
+              cfg.model.embeddings_and_evoformer.initial_guess = args.initial_guess # new for initial guessing
+              #do I also need to turn on template?
             
             
             cfg.model.recycle_tol = args.recycle_tol
             cfg.model.num_recycle = args.max_recycles
             
             
-
-
+            if args.initial_guess:
+              initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
+            else:
+              initial_guess = None
+            
             params = data.get_model_haiku_params(model_name,data_dir=ALPHAFOLD_DATADIR)
-            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates)
+            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates, initial_guess=initial_guess)
             prev_compile_settings = compile_settings
             recompile = False
 
@@ -659,8 +794,8 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
         if args.turbo:
           # go through each random_seed
-          for seed in range(args.nstruct):
-            
+          for seed in seed_range:
+              
             # prep input features
             processed_feature_dict = model_runner.process_features(feature_dict, random_seed=seed)
 
@@ -675,13 +810,19 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               key = f"{model_name}_seed_{seed}"
               pbar2.set_description(f'Running {key}')
 
+              #check if this prediction/seed has already been done
+              prefix = f"{name}_{key}" 
+              if not args.overwrite and os.path.exists(os.path.join(args.out_dir,f'{prefix}_prediction_results.json')):
+                print(f"{prefix}_prediction_results.json already exists")
+                continue
+
               # replace model parameters
               params = data.get_model_haiku_params(model_name, data_dir=ALPHAFOLD_DATADIR)
               for k in model_runner.params.keys():
                 model_runner.params[k] = params[k]
 
               # predict
-              prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed),device) #is this ok?
+              prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed,initial_guess=initial_guess),device) #is this ok?
 
               # save results
               outs[key] = parse_results(prediction_result, processed_feature_dict)
@@ -708,20 +849,32 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             else:
               cfg.data.common.num_recycle =args.max_recycles
               cfg.data.eval.num_ensemble = args.num_ensemble
+              cfg.model.embeddings_and_evoformer.initial_guess = args.initial_guess # new for initial guessing
 
             cfg.model.recycle_tol = args.recycle_tol
             cfg.model.num_recycle = args.max_recycles
 
+            if args.initial_guess:
+              initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
+            else:
+              initial_guess = None
 
-            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates)
+            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates, initial_guess=initial_guess)
 
             # go through each random_seed
-            for seed in range(args.nstruct):
+            for seed in seed_range:
               key = f"{model_name}_seed_{seed}"
               pbar2.set_description(f'Running {key}')
+
+              #check if this prediction/seed has already been done
+              prefix = f"{name}_{key}" 
+              if not args.overwrite and os.path.exists(os.path.join(args.out_dir,f'{prefix}_prediction_results.json')):
+                print(f"{prefix}_prediction_results.json already exists")
+                continue
+
               #print(feature_dict)
               processed_feature_dict = model_runner.process_features(feature_dict, random_seed=seed)
-              prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed),device) #is this ok?
+              prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed,initial_guess=initial_guess),device) #is this ok?
 
               # save results
               outs[key] = parse_results(prediction_result, processed_feature_dict)
