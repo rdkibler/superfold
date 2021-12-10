@@ -55,6 +55,7 @@ parser.add_argument("--recycle_tol",type=float,default=0.0,help="Stop recycling 
 parser.add_argument("--show_images",action="store_true")
 parser.add_argument("--save_intermediates",action="store_true",help="save intermediate structures between recycles. This is useful for making folding movies/trajectories")
 parser.add_argument("--amber_relax",action="store_true",help="use AMBER to relax the structure after prediction")
+parser.add_argument("--overwrite",action="store_true",help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.")
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
@@ -664,7 +665,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         if args.turbo:
           # go through each random_seed
           for seed in seed_range:
-            
+              
             # prep input features
             processed_feature_dict = model_runner.process_features(feature_dict, random_seed=seed)
 
@@ -678,6 +679,12 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               model_name = model_name+model_mod
               key = f"{model_name}_seed_{seed}"
               pbar2.set_description(f'Running {key}')
+
+              #check if this prediction/seed has already been done
+              prefix = f"{name}_{key}" 
+              if os.path.exists(os.path.join(args.out_dir,f'{prefix}_prediction_results.json')):
+                print(f"{prefix}_prediction_results.json already exists")
+                continue
 
               # replace model parameters
               params = data.get_model_haiku_params(model_name, data_dir=ALPHAFOLD_DATADIR)
@@ -723,6 +730,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             for seed in seed_range:
               key = f"{model_name}_seed_{seed}"
               pbar2.set_description(f'Running {key}')
+
+              #check if this prediction/seed has already been done
+              prefix = f"{name}_{key}" 
+              if os.path.exists(os.path.join(args.out_dir,f'{prefix}_prediction_results.json')):
+                print(f"{prefix}_prediction_results.json already exists")
+                continue
+
               #print(feature_dict)
               processed_feature_dict = model_runner.process_features(feature_dict, random_seed=seed)
               prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed),device) #is this ok?
