@@ -372,10 +372,17 @@ if args.amber_relax:
       max_outer_iterations=RELAX_MAX_OUTER_ITERATIONS)
 
 
+longest = max([len(tgt) for tgt in query_targets])
+
+if longest < 400 and device != "cpu":
+  #catch the user's eye
+  print("==================================================================================================================================================================")
+  print("WARNING: Your targets are shorter than 400 residues. This is a very small protein. You may want to use the CPU to conserve GPU resources for those who need them .")
+  print("See this example of how prediction time scales on CPU vs GPU: https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY")
+  print("==================================================================================================================================================================")
 
 if args.pad_lengths:
   #I don't htink this is the best implememntation wrt the use of "U" to pad
-  longest = max([len(tgt) for tgt in query_targets])
   query_targets = [tgt.padseq(longest - len(tgt)) for tgt in query_targets]
 
 
