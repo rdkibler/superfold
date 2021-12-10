@@ -284,7 +284,8 @@ class AlphaFold(hk.Module):
       is_training,
       compute_loss=False,
       ensemble_representations=False,
-      return_representations=False):
+      return_representations=False,
+      initial_guess=None):
     """Run the AlphaFold model.
 
     Arguments:
@@ -343,9 +344,18 @@ class AlphaFold(hk.Module):
 
     if self.config.num_recycle:
       emb_config = self.config.embeddings_and_evoformer
+
+      # Nate insertion
+      prev_pos=jnp.zeros(
+              [num_residues, residue_constants.atom_type_num, 3])
+
+      if emb_config.initial_guess:
+        prev_pos += initial_guess
+
+
+      #we can implement per-recycle checkpointing by dumping and loading this dict! #TODO
       prev = {
-          'prev_pos': jnp.zeros(
-              [num_residues, residue_constants.atom_type_num, 3]),
+          'prev_pos': prev_pos,
           'prev_msa_first_row': jnp.zeros(
               [num_residues, emb_config.msa_channel]),
           'prev_pair': jnp.zeros(
@@ -1542,7 +1552,7 @@ def dgram_from_positions(positions, num_bins, min_bin, max_bin):
            (dist2 < upper_breaks).astype(jnp.float32))
   return dgram
 
-
+# Nate is using this elsewhere and assumes that all_atom_masks is always None
 def pseudo_beta_fn(aatype, all_atom_positions, all_atom_masks):
   """Create pseudo beta features."""
 

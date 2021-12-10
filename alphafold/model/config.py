@@ -280,6 +280,7 @@ CONFIG = ml_collections.ConfigDict({
             'extra_msa_stack_num_block': 4,
             'max_relative_feature': 32,
             'msa_channel': 256,
+            'initial_guess': False,
             'pair_channel': 128,
             'prev_pos': {
                 'min_bin': 3.25,

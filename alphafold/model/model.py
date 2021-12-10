@@ -68,7 +68,8 @@ class RunModel:
                config: ml_collections.ConfigDict,
                params: Optional[Mapping[str, Mapping[str, np.ndarray]]] = None,
                is_training = False,
-               return_representations = False):
+               return_representations = False,
+               initial_guess = None):
     self.config = config
     self.params = params
     self.multimer_mode = config.model.global_config.multimer_mode
@@ -82,13 +83,14 @@ class RunModel:
             is_training=is_training,
             return_representations=return_representations)
     else:
-      def _forward_fn(batch):
+      def _forward_fn(batch,initial_guess=None):
         model = modules.AlphaFold(self.config.model)
         return model(
             batch,
             is_training=is_training,
             compute_loss=False,
             ensemble_representations=True,
+            initial_guess=initial_guess,
             return_representations=return_representations)
 
     self.apply = jax.jit(hk.transform(_forward_fn).apply)
@@ -154,6 +156,7 @@ class RunModel:
   def predict(self,
               feat: features.FeatureDict,
               random_seed: int,
+              initial_guess = None,
               ) -> Mapping[str, Any]:
     """Makes a prediction by inferencing the model on the provided features.
 
@@ -170,7 +173,7 @@ class RunModel:
     logging.info('Running predict with shape(feat) = %s',
                  tree.map_structure(lambda x: x.shape, feat))
 
-    result, recycles = self.apply(self.params, jax.random.PRNGKey(random_seed), feat)
+    result, recycles = self.apply(self.params, jax.random.PRNGKey(random_seed), feat, initial_guess=initial_guess)
     # This block is to ensure benchmark timings are accurate. Some blocking is
     # already happening when computing get_confidence_metrics, and this ensures
     # all outputs are blocked on.
