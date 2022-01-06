@@ -689,6 +689,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           import string
           alphabet = string.ascii_uppercase
           chain_range_map = get_chain_range_map(output_pdbstr)
+
           num_chains = len(chain_range_map)
           if target.pymol_obj_name is not None:
             #pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
@@ -700,13 +701,12 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             pymol.cmd.delete('temp_target')
             output_line += f" rmsd_to_input:{rmsd:0.2f}"
           else:
-            final_chain_order = alphabet[:num_chains].split()
+            final_chain_order = list(alphabet[:num_chains])
 
           with open(fout_name, 'w') as f:
             f.write(output_pdbstr)
 
           final_chain_order_mapping = {old_chain:new_chain for old_chain,new_chain in zip(alphabet,final_chain_order)}
-          print(final_chain_order_mapping)
 
           import itertools
           if args.type == "monomer_ptm":
