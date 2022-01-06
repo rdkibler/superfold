@@ -57,6 +57,7 @@ parser.add_argument("--save_intermediates",action="store_true",help="save interm
 parser.add_argument("--amber_relax",action="store_true",help="use AMBER to relax the structure after prediction")
 parser.add_argument("--overwrite",action="store_true",help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.")
 parser.add_argument("--initial_guess",action="store_true",help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation.")
+parser.add_argument("--reference_pdb",type=str,help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files")
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
@@ -165,7 +166,7 @@ def get_chain_permutations(chains:list) -> list:
 
     return list(itertools.permutations(chains))
     
-def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tuple[float, str, list]:
+def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str, alignment_mode:str = "align") -> Tuple[float, str, list]:
     """
     Aligns two multichain models using pymol.
     Returns the RMSD and the aligned model.
@@ -182,6 +183,8 @@ def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tu
 
     chains = pymol.cmd.get_chains(model_pymol_name)
 
+    align_func = getattr(pymol.cmd, alignment_mode)
+
     best_rmsd = float('inf')
     best_order = None
     for new_order in get_chain_permutations(chains):
@@ -189,7 +192,7 @@ def pymol_multichain_align(model_pymol_name:str, reference_pymol_name:str) -> Tu
         pymol.cmd.delete(temp_pymol_name)
         pymol.cmd.create(temp_pymol_name, model_pymol_name)
         pymol_apply_new_chains(temp_pymol_name, new_order)
-        rmsd = pymol.cmd.align(f'{temp_pymol_name} and n. CA', f'{reference_pymol_name} and n. CA',cycles=0)[0]
+        rmsd = align_func(f'{temp_pymol_name} and n. CA', f'{reference_pymol_name} and n. CA',cycles=0)[0]
         
         #debug: useful to see if alignment is working
         #print(f'{rmsd} {new_order}')
@@ -515,7 +518,12 @@ def mk_mock_template(query_sequence):
 
 
 
+#### load up reference pdb, if present
 
+reference_pdb_name = "REFERENCE"
+pymol.cmd.load(args.reference_pdb, reference_pdb_name)
+
+######################################
 
 
 
@@ -691,17 +699,26 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           chain_range_map = get_chain_range_map(output_pdbstr)
 
           num_chains = len(chain_range_map)
+
+          final_chain_order = list(alphabet[:num_chains]) #initialize with original order, basically, for the default case where there is no refernce or input pdb file
+
+          if args.reference_pdb is not None:
+            pymol.cmd.read_pdbstr(output_pdbstr,oname='temp_target')
+            rmsd,output_pdbstr,final_chain_order = pymol_multichain_align('temp_target',reference_pdb_name,"super") #use super here b/c sequence is not guaranteed to be very similar
+
+            out_dict['rmsd_to_reference'] = rmsd
+            pymol.cmd.delete('temp_target')
+            output_line += f" rmsd_to_reference:{rmsd:0.2f}"
+
           if target.pymol_obj_name is not None:
             #pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
             pymol.cmd.read_pdbstr(output_pdbstr,oname='temp_target')
             rmsd,output_pdbstr,final_chain_order = pymol_multichain_align('temp_target',target.pymol_obj_name)
 
-
             out_dict['rmsd_to_input'] = rmsd
             pymol.cmd.delete('temp_target')
             output_line += f" rmsd_to_input:{rmsd:0.2f}"
-          else:
-            final_chain_order = list(alphabet[:num_chains])
+            
 
           with open(fout_name, 'w') as f:
             f.write(output_pdbstr)
