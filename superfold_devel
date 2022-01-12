@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+cluster=`sacctmgr list cluster | head -n3 | tail -n1 | awk '{$1=$1};1' | cut -d ' ' -f1`
+
+echo "running on ${cluster}"
+
+case $cluster in
+
+	digs)
+		python_interpreter="/home/rdkibler/.conda/envs/pyroml/bin/python3.8"
+	;;
+
+	perlmutter)
+		python_interpreter="/global/cfs/cdirs/m3962/users/rdkibler/software/pyroml/bin/python3.8"
+	;;
+
+	*)
+		echo "cluster not recognized"
+
+esac
+
+
+#https://stackoverflow.com/questions/59895/how-can-i-get-the-source-directory-of-a-bash-script-from-within-the-script-itsel
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+
+
+echo "${python_interpreter} ${DIR}/run_superfold_devel.py $@" | exec bash

@@ -1,6 +1,11 @@
 #!/home/rdkibler/.conda/envs/pyroml/bin/python3.8
 
-#this is almost entirely based on krypton's stuff https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
+#most of the code is copied from krypton's colabfold https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
+#The initial guess stuff is from Nate Bennett with maybe some helper code from Adam Broerman
+#pae code is lifted from Nate
+#it contains alphafold2-multimer but don't use it
+#krypton is basically lead author without knowing it
+
 import time
 time_checkpoint = time.time()
 import argparse
@@ -53,6 +58,7 @@ parser.add_argument("--turbo",action="store_true",help="use the latest and great
 parser.add_argument("--max_recycles",type=int,default=3,help="max number of times to run evoformer. Default is 3. Single domain proteins need fewer runs. Multidomain or PPI may need more")
 parser.add_argument("--recycle_tol",type=float,default=0.0,help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)")
 parser.add_argument("--show_images",action="store_true")
+parser.add_argument("--output_pae",action="store_true",help="dump the PAE matrix to disk. This is useful for investigating interresidue relationships.")
 parser.add_argument("--save_intermediates",action="store_true",help="save intermediate structures between recycles. This is useful for making folding movies/trajectories")
 parser.add_argument("--amber_relax",action="store_true",help="use AMBER to relax the structure after prediction")
 parser.add_argument("--overwrite",action="store_true",help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.")
@@ -519,9 +525,9 @@ def mk_mock_template(query_sequence):
 
 
 #### load up reference pdb, if present
-
-reference_pdb_name = "REFERENCE"
-pymol.cmd.load(args.reference_pdb, reference_pdb_name)
+if args.reference_pdb is not None:
+    reference_pdb_name = "REFERENCE"
+    pymol.cmd.load(args.reference_pdb, reference_pdb_name)
 
 ######################################
 
@@ -729,6 +735,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           if args.type == "monomer_ptm":
             #calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
             pae = o['pae']
+
+            if args.output_pae:
+              out_dict['pae'] = pae
+
             interaction_paes = []
             for chain_1,chain_2 in itertools.permutations(final_chain_order,2):
               chain_1_range_start,chain_1_range_stop = chain_range_map[chain_1]
