@@ -245,7 +245,7 @@ class PredictionTarget:
     return len(self) < len(other)
   
   def __len__(self):
-    return len(self.seq)
+    return len(self.seq.replace("/",""))
 
   def padseq(self,pad_amt):
     return PredictionTarget(self.name,self.seq + "U"*pad_amt,self.pymol_obj_name)
@@ -660,7 +660,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               initial_guess = None
             
             params = data.get_model_haiku_params(model_name,data_dir=ALPHAFOLD_DATADIR)
-            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates, initial_guess=initial_guess)
+
+            #hack to bandaid initial guess w/ multimer
+            if args.initial_guess:
+              model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates, initial_guess=initial_guess)
+            else:
+              model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates)
+
             prev_compile_settings = compile_settings
             recompile = False
 
@@ -735,6 +741,14 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
           if args.type == "monomer_ptm":
             #calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
             pae = o['pae']
+
+            #first, truncate the matrix to the full length of the sequence (without chainbreak characters "/"). It can sometimes be too long because of padding inputs
+            sequence_length = len(target.seq.replace("/","").replace("U","")) 
+            print("###################### DEGUB ######################")
+            print(sequence_length)
+            print(pae.shape)
+            pae = pae[:sequence_length,:sequence_length]
+            print(pae.shape)
 
             if args.output_pae:
               out_dict['pae'] = pae
@@ -849,7 +863,12 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 model_runner.params[k] = params[k]
 
               # predict
-              prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed,initial_guess=initial_guess),device) #is this ok?
+              if args.initial_guess:
+                prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed,initial_guess=initial_guess),device) #is this ok?
+              else:
+                #a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?). 
+                #the fix will be to update Multimer code to accept initial_guess deep down in the actual code
+                prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed),device) #is this ok?
 
               # save results
               outs[key] = parse_results(prediction_result, processed_feature_dict)
@@ -886,7 +905,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             else:
               initial_guess = None
 
-            model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates, initial_guess=initial_guess)
+            if args.initial_guess:
+              model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates, initial_guess=initial_guess)
+            else:
+              model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates)
 
             # go through each random_seed
             for seed in seed_range:
@@ -901,7 +923,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
               #print(feature_dict)
               processed_feature_dict = model_runner.process_features(feature_dict, random_seed=seed)
-              prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed,initial_guess=initial_guess),device) #is this ok?
+              if args.initial_guess:
+                prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed,initial_guess=initial_guess),device) #is this ok?
+              else:
+                prediction_result, (r, t) = cf.to(model_runner.predict(processed_feature_dict, random_seed=seed),device) #is this ok?
 
               # save results
               outs[key] = parse_results(prediction_result, processed_feature_dict)
