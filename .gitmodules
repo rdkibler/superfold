@@ -1,0 +1,3 @@
+[submodule "silent_tools"]
+	path = silent_tools
+	url = https://github.com/bcov77/silent_tools.git
