@@ -1,4 +1,4 @@
-
+__author__ = "Ryan Kibler, Sergey Ovchinnikov, Nate Bennet, Philip Leung, Adam Broerman" # TODO others?
 #most of the code is copied from krypton's colabfold https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
 #The initial guess stuff is from Nate Bennett with maybe some helper code from Adam Broerman
 #pae code is lifted from Nate
