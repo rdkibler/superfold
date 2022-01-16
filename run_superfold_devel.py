@@ -1,5 +1,4 @@
-#!/home/rdkibler/.conda/envs/pyroml/bin/python3.8
-
+__author__ = "Ryan Kibler, Sergey Ovchinnikov, Nate Bennet, Philip Leung, Adam Broerman" # TODO others?
 #most of the code is copied from krypton's colabfold https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
 #The initial guess stuff is from Nate Bennett with maybe some helper code from Adam Broerman
 #pae code is lifted from Nate
@@ -62,7 +61,7 @@ parser.add_argument("--output_pae",action="store_true",help="dump the PAE matrix
 parser.add_argument("--save_intermediates",action="store_true",help="save intermediate structures between recycles. This is useful for making folding movies/trajectories")
 parser.add_argument("--amber_relax",action="store_true",help="use AMBER to relax the structure after prediction")
 parser.add_argument("--overwrite",action="store_true",help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.")
-parser.add_argument("--initial_guess",action="store_true",help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation.")
+parser.add_argument("--initial_guess",nargs="?",const=True,default=False,help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation. If no path is provided, the input_file must be a PDB or silent. If a path is provided, the input must be a fasta.")
 parser.add_argument("--reference_pdb",type=str,help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files")
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
@@ -77,9 +76,11 @@ parser.add_argument("--out_dir",type=str,default="output/",help="Directory to ou
 args = parser.parse_args()
 
 
-import os
+from pathlib import Path
 import pymol
-import silent_tools
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "silent_tools"))
+import silent_tools # installed as a submodule
 from dataclasses import dataclass
 from typing import Union, Tuple, Dict
 import numpy as np
@@ -420,6 +421,31 @@ if args.initial_guess and args.version == "multimer":
   print("WARNING: initial guess and multimer are not compatible. ")
   exit(1)
 
+#TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
+if type(args.initial_guess) == str: # check input_file type
+  if ".pdb" in args.input_files[0]:
+    print("WARNING: initial guess was provided a PDB and input_file was a PDB")
+    print("No followup argument is needed for initial guess when input_file is a PDB")
+    exit(1)
+  elif ".silent" in args.input_files[0]:
+    print("WARNING: initial guess was provided a PDB and input_file was a .silent")
+    print("No followup argument is needed for initial guess when input_file is a silent")
+    exit(1)
+  else:
+    pass
+else:
+  pass
+if ".fa" in args.input_files[0]:
+  if type(args.initial_guess) != str:
+    print("WARNING: initial guess needs a PDB if input_file was a fasta")
+    exit(1)
+  else:
+    pass
+else:
+  pass
+
+
+
 
 #######################################################################################################################
 # Adapted from code by Nate Bennett for providing initial guess for the alphafold model
@@ -529,6 +555,11 @@ if args.reference_pdb is not None:
     reference_pdb_name = "REFERENCE"
     pymol.cmd.load(args.reference_pdb, reference_pdb_name)
 
+#### load up initial guess pdb, if present
+if type(args.initial_guess) == str:
+    initial_guess_name = "INITIAL_GUESS"
+    pymol.cmd.load(args.initial_guess, initial_guess_name)
+
 ######################################
 
 
@@ -623,7 +654,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
           N = len(feature_dict["msa"])
           L = len(feature_dict["residue_index"])
-          compile_settings = (N, L, args.type, args.max_recycles, args.recycle_tol, args.num_ensemble, args.mock_msa_depth, args.enable_dropout, args.pct_seq_mask, args.initial_guess)
+          compile_settings = (N, L, args.type, args.max_recycles, args.recycle_tol, args.num_ensemble, args.mock_msa_depth, args.enable_dropout, args.pct_seq_mask, bool(args.initial_guess)) # casting string to bool returns true
 
           recompile = prev_compile_settings != compile_settings
 
@@ -646,7 +677,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
               cfg.data.common.max_extra_msa = args.mock_msa_depth
               cfg.data.eval.masked_msa_replace_fraction = args.pct_seq_mask
               cfg.data.common.num_recycle = args.max_recycles
-              cfg.model.embeddings_and_evoformer.initial_guess = args.initial_guess # new for initial guessing
+              cfg.model.embeddings_and_evoformer.initial_guess = bool(args.initial_guess) # new for initial guessing
               #do I also need to turn on template?
             
             
@@ -654,10 +685,12 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             cfg.model.num_recycle = args.max_recycles
             
             
-            if args.initial_guess:
-              initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
-            else:
+            if not args.initial_guess: # initial guess is False by default
               initial_guess = None
+            elif type(args.initial_guess) == str: # use the provided pdb
+              initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
+            else: # use the target structure
+              initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
             
             params = data.get_model_haiku_params(model_name,data_dir=ALPHAFOLD_DATADIR)
 
@@ -895,15 +928,17 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             else:
               cfg.data.common.num_recycle =args.max_recycles
               cfg.data.eval.num_ensemble = args.num_ensemble
-              cfg.model.embeddings_and_evoformer.initial_guess = args.initial_guess # new for initial guessing
+              cfg.model.embeddings_and_evoformer.initial_guess = bool(args.initial_guess) # new for initial guessing
 
             cfg.model.recycle_tol = args.recycle_tol
             cfg.model.num_recycle = args.max_recycles
 
-            if args.initial_guess:
-              initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
-            else:
+            if not args.initial_guess: # initial guess is False by default
               initial_guess = None
+            elif type(args.initial_guess) == str: # use the provided pdb
+              initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
+            else: # use the target structure
+              initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
 
             if args.initial_guess:
               model_runner = model.RunModel(cfg, params, is_training=args.enable_dropout, return_representations=args.save_intermediates, initial_guess=initial_guess)
