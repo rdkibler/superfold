@@ -76,7 +76,6 @@ class RunModel:
         params: Optional[Mapping[str, Mapping[str, np.ndarray]]] = None,
         is_training=False,
         return_representations=False,
-        initial_guess=None,
     ):
         self.config = config
         self.params = params
