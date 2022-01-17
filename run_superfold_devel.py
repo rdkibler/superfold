@@ -108,11 +108,6 @@ parser.add_argument(
     help="number of times to process the input features and combine. default = 1. Deepmind used 8 for casp. Expert Option.",
 )
 parser.add_argument(
-    "--turbo",
-    action="store_true",
-    help="use the latest and greatest hacks to make it run fast fast fast.",
-)
-parser.add_argument(
     "--max_recycles",
     type=int,
     default=3,
@@ -196,7 +191,6 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 plt.switch_backend("agg")
-import time
 
 os.makedirs(args.out_dir, exist_ok=True)
 
@@ -502,7 +496,6 @@ from alphafold.model import model
 from alphafold.model import config
 from alphafold.model import data
 from alphafold.common import protein
-
 from alphafold.data import parsers
 
 # I don't know if this is a good idea.
@@ -849,99 +842,96 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 #######################################################################
                 # precompile model and recompile only if length changes
                 #######################################################################
-                if args.turbo:
-                    if args.type == "multimer":
-                        model_name = "model_5_multimer"
-                    else:
-                        model_name = (
-                            "model_5_ptm" if args.type == "monomer_ptm" else "model_5"
-                        )
-
-                    N = len(feature_dict["msa"])
-                    L = len(feature_dict["residue_index"])
-                    compile_settings = (
-                        N,
-                        L,
-                        args.type,
-                        args.max_recycles,
-                        args.recycle_tol,
-                        args.num_ensemble,
-                        args.mock_msa_depth,
-                        args.enable_dropout,
-                        args.pct_seq_mask,
-                        bool(args.initial_guess),
-                    )  # casting string to bool returns true
-
-                    recompile = prev_compile_settings != compile_settings
-
-                    if recompile:
-                        cf.clear_mem(device)  ##is this ok?
-                        cfg = config.model_config(model_name)
-
-                        if args.version == "multimer":
-                            cfg.model.num_ensemble_eval = args.num_ensemble
-                            # cfg.model.embeddings_and_evoformer.num_extra_msa = args.mock_msa_depth
-                            cfg.model.embeddings_and_evoformer.masked_msa.replace_fraction = (
-                                args.pct_seq_mask
-                            )
-
-                            # templates are enabled by default, but I'm not supplying them, so disable
-                            cfg.model.embeddings_and_evoformer.template.enabled = False
-
-                        else:
-                            cfg.data.eval.num_ensemble = args.num_ensemble
-                            cfg.data.eval.max_msa_clusters = args.mock_msa_depth
-                            cfg.data.common.max_extra_msa = args.mock_msa_depth
-                            cfg.data.eval.masked_msa_replace_fraction = (
-                                args.pct_seq_mask
-                            )
-                            cfg.data.common.num_recycle = args.max_recycles
-                            cfg.model.embeddings_and_evoformer.initial_guess = bool(
-                                args.initial_guess
-                            )  # new for initial guessing
-                            # do I also need to turn on template?
-
-                        cfg.model.recycle_tol = args.recycle_tol
-                        cfg.model.num_recycle = args.max_recycles
-
-                        if not args.initial_guess:  # initial guess is False by default
-                            initial_guess = None
-                        elif type(args.initial_guess) == str:  # use the provided pdb
-                            initial_guess = af2_all_atom_pymol_object_name(
-                                "INITIAL_GUESS"
-                            )
-                        else:  # use the target structure
-                            initial_guess = af2_all_atom_pymol_object_name(
-                                target.pymol_obj_name
-                            )
-
-                        params = data.get_model_haiku_params(
-                            model_name, data_dir=ALPHAFOLD_DATADIR
-                        )
-
-                        # hack to bandaid initial guess w/ multimer
-                        if args.initial_guess:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
-                                initial_guess=initial_guess,
-                            )
-                        else:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
-                            )
-
-                        prev_compile_settings = compile_settings
-                        recompile = False
-
+                if args.type == "multimer":
+                    model_name = "model_5_multimer"
                 else:
-                    # cf.clear_mem(device) #is this ok
-                    recompile = True
+                    model_name = (
+                        "model_5_ptm" if args.type == "monomer_ptm" else "model_5"
+                    )
+
+                N = len(feature_dict["msa"])
+                L = len(feature_dict["residue_index"])
+                compile_settings = (
+                    N,
+                    L,
+                    args.type,
+                    args.max_recycles,
+                    args.recycle_tol,
+                    args.num_ensemble,
+                    args.mock_msa_depth,
+                    args.enable_dropout,
+                    args.pct_seq_mask,
+                    bool(args.initial_guess),
+                )  # casting string to bool returns true
+
+                recompile = prev_compile_settings != compile_settings
+
+                if recompile:
+                    cf.clear_mem(device)  ##is this ok?
+                    cfg = config.model_config(model_name)
+
+                    if args.version == "multimer":
+                        cfg.model.num_ensemble_eval = args.num_ensemble
+                        # cfg.model.embeddings_and_evoformer.num_extra_msa = args.mock_msa_depth
+                        cfg.model.embeddings_and_evoformer.masked_msa.replace_fraction = (
+                            args.pct_seq_mask
+                        )
+
+                        # templates are enabled by default, but I'm not supplying them, so disable
+                        cfg.model.embeddings_and_evoformer.template.enabled = False
+
+                    else:
+                        cfg.data.eval.num_ensemble = args.num_ensemble
+                        cfg.data.eval.max_msa_clusters = args.mock_msa_depth
+                        cfg.data.common.max_extra_msa = args.mock_msa_depth
+                        cfg.data.eval.masked_msa_replace_fraction = (
+                            args.pct_seq_mask
+                        )
+                        cfg.data.common.num_recycle = args.max_recycles
+                        cfg.model.embeddings_and_evoformer.initial_guess = bool(
+                            args.initial_guess
+                        )  # new for initial guessing
+                        # do I also need to turn on template?
+
+                    cfg.model.recycle_tol = args.recycle_tol
+                    cfg.model.num_recycle = args.max_recycles
+
+                    if not args.initial_guess:  # initial guess is False by default
+                        initial_guess = None
+                    elif type(args.initial_guess) == str:  # use the provided pdb
+                        initial_guess = af2_all_atom_pymol_object_name(
+                            "INITIAL_GUESS"
+                        )
+                    else:  # use the target structure
+                        initial_guess = af2_all_atom_pymol_object_name(
+                            target.pymol_obj_name
+                        )
+
+                    params = data.get_model_haiku_params(
+                        model_name, data_dir=ALPHAFOLD_DATADIR
+                    )
+
+                    # hack to bandaid initial guess w/ multimer
+                    if args.initial_guess:
+                        model_runner = model.RunModel(
+                            cfg,
+                            params,
+                            is_training=args.enable_dropout,
+                            return_representations=args.save_intermediates,
+                            initial_guess=initial_guess,
+                        )
+                    else:
+                        model_runner = model.RunModel(
+                            cfg,
+                            params,
+                            is_training=args.enable_dropout,
+                            return_representations=args.save_intermediates,
+                        )
+
+                    prev_compile_settings = compile_settings
+                    recompile = False
+
+              
 
                 # cleanup
                 if "outs" in dir():
@@ -1135,76 +1125,14 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                 #######################################################################
 
-                if args.turbo:
-                    # go through each random_seed
-                    for seed in seed_range:
+                # go through each random_seed
+                for seed in seed_range:
 
-                        # prep input features
-                        processed_feature_dict = model_runner.process_features(
-                            feature_dict, random_seed=seed
-                        )
+                    # prep input features
+                    processed_feature_dict = model_runner.process_features(
+                        feature_dict, random_seed=seed
+                    )
 
-                        # go through each model
-                        for num, model_name in enumerate(model_names):
-                            model_mod = ""
-                            if args.type == "monomer_ptm":
-                                model_mod = "_ptm"
-                            elif args.type == "multimer":
-                                model_mod = "_multimer"
-                            model_name = model_name + model_mod
-                            key = f"{model_name}_seed_{seed}"
-                            pbar2.set_description(f"Running {key}")
-
-                            # check if this prediction/seed has already been done
-                            prefix = f"{name}_{key}"
-                            if not args.overwrite and os.path.exists(
-                                os.path.join(
-                                    args.out_dir, f"{prefix}_prediction_results.json"
-                                )
-                            ):
-                                print(
-                                    f"{prefix}_prediction_results.json already exists"
-                                )
-                                continue
-
-                            # replace model parameters
-                            params = data.get_model_haiku_params(
-                                model_name, data_dir=ALPHAFOLD_DATADIR
-                            )
-                            for k in model_runner.params.keys():
-                                model_runner.params[k] = params[k]
-
-                            # predict
-                            if args.initial_guess:
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict,
-                                        random_seed=seed,
-                                        initial_guess=initial_guess,
-                                    ),
-                                    device,
-                                )  # is this ok?
-                            else:
-                                # a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?).
-                                # the fix will be to update Multimer code to accept initial_guess deep down in the actual code
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict, random_seed=seed
-                                    ),
-                                    device,
-                                )  # is this ok?
-
-                            # save results
-                            outs[key] = parse_results(
-                                prediction_result, processed_feature_dict
-                            )
-                            outs[key].update({"recycles": r, "tol": t})
-                            report(key)
-
-                            del prediction_result, params
-                        del processed_feature_dict
-
-                else:
                     # go through each model
                     for num, model_name in enumerate(model_names):
                         model_mod = ""
@@ -1213,98 +1141,58 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                         elif args.type == "multimer":
                             model_mod = "_multimer"
                         model_name = model_name + model_mod
+                        key = f"{model_name}_seed_{seed}"
+                        pbar2.set_description(f"Running {key}")
+
+                        # check if this prediction/seed has already been done
+                        prefix = f"{name}_{key}"
+                        if not args.overwrite and os.path.exists(
+                            os.path.join(
+                                args.out_dir, f"{prefix}_prediction_results.json"
+                            )
+                        ):
+                            print(
+                                f"{prefix}_prediction_results.json already exists"
+                            )
+                            continue
+
+                        # replace model parameters
                         params = data.get_model_haiku_params(
                             model_name, data_dir=ALPHAFOLD_DATADIR
                         )
-                        cfg = config.model_config(model_name)
+                        for k in model_runner.params.keys():
+                            model_runner.params[k] = params[k]
 
-                        if args.type == "multimer":
-                            cfg.data.num_ensemble_eval = args.num_ensemble
-                        else:
-                            cfg.data.common.num_recycle = args.max_recycles
-                            cfg.data.eval.num_ensemble = args.num_ensemble
-                            cfg.model.embeddings_and_evoformer.initial_guess = bool(
-                                args.initial_guess
-                            )  # new for initial guessing
-
-                        cfg.model.recycle_tol = args.recycle_tol
-                        cfg.model.num_recycle = args.max_recycles
-
-                        if not args.initial_guess:  # initial guess is False by default
-                            initial_guess = None
-                        elif type(args.initial_guess) == str:  # use the provided pdb
-                            initial_guess = af2_all_atom_pymol_object_name(
-                                "INITIAL_GUESS"
-                            )
-                        else:  # use the target structure
-                            initial_guess = af2_all_atom_pymol_object_name(
-                                target.pymol_obj_name
-                            )
-
+                        # predict
                         if args.initial_guess:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
-                                initial_guess=initial_guess,
-                            )
+                            prediction_result, (r, t) = cf.to(
+                                model_runner.predict(
+                                    processed_feature_dict,
+                                    random_seed=seed,
+                                    initial_guess=initial_guess,
+                                ),
+                                device,
+                            )  # is this ok?
                         else:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
-                            )
+                            # a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?).
+                            # the fix will be to update Multimer code to accept initial_guess deep down in the actual code
+                            prediction_result, (r, t) = cf.to(
+                                model_runner.predict(
+                                    processed_feature_dict, random_seed=seed
+                                ),
+                                device,
+                            )  # is this ok?
 
-                        # go through each random_seed
-                        for seed in seed_range:
-                            key = f"{model_name}_seed_{seed}"
-                            pbar2.set_description(f"Running {key}")
+                        # save results
+                        outs[key] = parse_results(
+                            prediction_result, processed_feature_dict
+                        )
+                        outs[key].update({"recycles": r, "tol": t})
+                        report(key)
 
-                            # check if this prediction/seed has already been done
-                            prefix = f"{name}_{key}"
-                            if not args.overwrite and os.path.exists(
-                                os.path.join(
-                                    args.out_dir, f"{prefix}_prediction_results.json"
-                                )
-                            ):
-                                print(
-                                    f"{prefix}_prediction_results.json already exists"
-                                )
-                                continue
+                        del prediction_result, params
+                    del processed_feature_dict
 
-                            # print(feature_dict)
-                            processed_feature_dict = model_runner.process_features(
-                                feature_dict, random_seed=seed
-                            )
-                            if args.initial_guess:
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict,
-                                        random_seed=seed,
-                                        initial_guess=initial_guess,
-                                    ),
-                                    device,
-                                )  # is this ok?
-                            else:
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict, random_seed=seed
-                                    ),
-                                    device,
-                                )  # is this ok?
-
-                            # save results
-                            outs[key] = parse_results(
-                                prediction_result, processed_feature_dict
-                            )
-                            outs[key].update({"recycles": r, "tol": t})
-                            report(key)
-
-                            # cleanup
-                            del processed_feature_dict, prediction_result
-
-                        del params, model_runner, cfg
+                
 
             pbar1.update(1)
