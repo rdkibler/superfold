@@ -544,23 +544,13 @@ if longest < 400 and device != "cpu":
     # catch the user's eye
     plural = "s are" if len(query_targets) > 1 else " is"
     print(
-        "======================================================================================="
-    )
-    print(
-        f"WARNING: Your query{plural} shorter than 400 residues. This is a very small protein."
-    )
-    print(
-        "You may want to use the CPU to conserve GPU resources for those who need them."
-    )
-    print(
-        "Remember that you can launch far more jobs in parallel on CPUs than you can on GPUs..."
-    )
-    print("See this example of how prediction time scales on CPU vs GPU: ")
-    print(
-        "https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY"
-    )
-    print(
-        "======================================================================================="
+        "=======================================================================================\n"
+        + f"WARNING: Your query{plural} shorter than 400 residues. This is a very small protein.\n"
+        + "You may want to use the CPU to conserve GPU resources for those who need them.\n"
+        + "Remember that you can launch far more jobs in parallel on CPUs than you can on GPUs...\n"
+        + "See this example of how prediction time scales on CPU vs GPU: \n"
+        + "https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY\n"
+        + "======================================================================================="
     )
 
 if args.pad_lengths:
