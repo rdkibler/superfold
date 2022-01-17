@@ -60,30 +60,29 @@ parser.add_argument(
     help="Paths to PDB files or FASTA files to run AlphaFold2 predictions on.",
 )
 
-parser.add_argument(
-    "--pad_lengths",
-    action="store_true",
-    help="compile the model once to the longest input PDB and pad the remaining sequences. Ryan is unsure how this affects prediction accuracy, but it will speed up multiple prediction.",
-)
+#could try using a type here (like input files) to assert that the value is greater than 1. Instead right now we assert below.
 parser.add_argument(
     "--mock_msa_depth",
-    default=512,
-    help="fake the msa. Default = 512. to go fast, use 1",
+    default=1,
+    help="fake the msa. Lower is faster, but potentially less accurate. Range [1,inf). AF2 default is 512. Our Default = 1.",
     type=int,
 )
+
 parser.add_argument(
     "--models",
     choices=["1", "2", "3", "4", "5", "all"],
-    default="4",
+    default="all",
     nargs="+",
-    help="Deepmind provided five sets of weights/models. You can choose any combination of models to run. The model number 5 has been found (by aivan) to perform the best on single sequences so this is the default, but using multiple models might provide you with a relevent ensemble of structures.",
+    help="Deepmind provided five sets of weights/models. You can choose any combination of models to run.",
 )
+
 parser.add_argument(
     "--type",
     choices=["monomer", "monomer_ptm", "multimer"],
     default="monomer_ptm",
     help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. The use of multimer weights with standard AF2 probably won't work",
 )
+
 parser.add_argument(
     "--version",
     choices=["monomer", "multimer"],
@@ -91,45 +90,62 @@ parser.add_argument(
     help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' version is equivalent to AF2-Multimer and should not be used with the monomer weight types.",
 )
 
-
 parser.add_argument(
     "--nstruct",
     help="Number of independent outputs to generate PER MODEL. It will make predictions with seeds starting at 'seed_start' and increasing by one until n outputs are generated (like seed_range = range(seed_start,seed_start + nstruct)). Default=1",
     default=1,
     type=int,
 )
+
 parser.add_argument(
     "--seed_start", type=int, help="Seed to start at. Default=0", default=0
 )
+
 parser.add_argument(
     "--num_ensemble",
     type=int,
     default=1,
     help="number of times to process the input features and combine. default = 1. Deepmind used 8 for casp. Expert Option.",
 )
+
 parser.add_argument(
     "--max_recycles",
     type=int,
     default=3,
     help="max number of times to run evoformer. Default is 3. Single domain proteins need fewer runs. Multidomain or PPI may need more",
 )
+
 parser.add_argument(
     "--recycle_tol",
     type=float,
     default=0.0,
     help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)",
 )
+
+# #An idea in current colab fold. 
+# parser.add_argument(
+#     "--prediction_threshold",
+#     nargs=2,
+#     metavar=('value','type'),
+#     help="Continue recycling until the prediction is above the threshold or the num_recycles == max_recycles. Type choices are ['mean_plddt','mean_pae','rmsd_prev']",
+# )
+
+#unknown if this currently works
 parser.add_argument("--show_images", action="store_true")
+
 parser.add_argument(
     "--output_pae",
     action="store_true",
     help="dump the PAE matrix to disk. This is useful for investigating interresidue relationships.",
 )
+
+#unknown if this currently works
 parser.add_argument(
     "--save_intermediates",
     action="store_true",
     help="save intermediate structures between recycles. This is useful for making folding movies/trajectories",
 )
+
 parser.add_argument(
     "--amber_relax",
     action="store_true",
@@ -152,6 +168,7 @@ parser.add_argument(
     type=str,
     help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
 )
+
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
@@ -167,7 +184,6 @@ parser.add_argument(
     default=0.15,
     help="percent of sequence to make during inference. Default = 0.15. Setting to 0 might reduce prediction stocasticity.",
 )
-# parser.add_argument("--deepaccnet",action="store_true",help="Run DeepAccNet on the AlphaFold2 outputs.")
 
 parser.add_argument(
     "--out_dir",
@@ -178,6 +194,7 @@ parser.add_argument(
 
 args = parser.parse_args()
 
+assert(args.mock_msa_depth > 0)
 
 from pathlib import Path
 import pymol
@@ -546,9 +563,9 @@ if longest < 400 and device != "cpu":
         + "======================================================================================="
     )
 
-if args.pad_lengths:
-    # I don't htink this is the best implememntation wrt the use of "U" to pad
-    query_targets = [tgt.padseq(longest - len(tgt)) for tgt in query_targets]
+#POOR LENGTH PADDING
+# I don't htink this is the best implememntation wrt the use of "U" to pad
+query_targets = [tgt.padseq(longest - len(tgt)) for tgt in query_targets]
 
 
 length_dict = defaultdict(lambda: [])
@@ -558,8 +575,7 @@ for tgt in query_targets:
 # sort so longer first so it fails early
 lengths = sorted(length_dict.keys(), reverse=True)
 
-if args.pad_lengths:
-    assert len(lengths) == 1
+assert len(lengths) == 1
 
 prev_compile_settings = tuple()
 
