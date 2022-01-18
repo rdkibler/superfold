@@ -944,20 +944,21 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         ###########################
         def parse_results(prediction_result, processed_feature_dict):
 
-
-            #figure note... it would be nice to use prediction_result["structure_module"]["final_atom_mask"] to mask out everything in prediction_result that shouldn't be there due to padding. 
+            # figure note... it would be nice to use prediction_result["structure_module"]["final_atom_mask"] to mask out everything in prediction_result that shouldn't be there due to padding.
             b_factors = (
                 prediction_result["plddt"][:, None]
-                * prediction_result["structure_module"]["final_atom_mask"] #I think not needed b/c I truncated the vector earlier
+                * prediction_result["structure_module"][
+                    "final_atom_mask"
+                ]  # I think not needed b/c I truncated the vector earlier
             )
 
-            #but for now let's focus on truncating the results we most care about to the length of the target sequence
-            prediction_result['plddt'] = prediction_result['plddt'][:len(target.seq)]
+            # but for now let's focus on truncating the results we most care about to the length of the target sequence
+            prediction_result["plddt"] = prediction_result["plddt"][: len(target.seq)]
             if "predicted_aligned_error" in prediction_result:
-              prediction_result['predicted_aligned_error'] = prediction_result['predicted_aligned_error'][:len(target.seq), :len(target.seq)]
+                prediction_result["predicted_aligned_error"] = prediction_result[
+                    "predicted_aligned_error"
+                ][: len(target.seq), : len(target.seq)]
 
-
-            
             dist_bins = jax.numpy.append(0, prediction_result["distogram"]["bin_edges"])
             dist_mtx = dist_bins[prediction_result["distogram"]["logits"].argmax(-1)]
             contact_mtx = jax.nn.softmax(prediction_result["distogram"]["logits"])[
@@ -1019,9 +1020,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
 
                 output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
-                with open("debug.pdb",'w') as f:
+                with open("debug.pdb", "w") as f:
                     f.write(output_pdbstr)
-                    
+
                 output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
                 output_pdbstr = renumber(output_pdbstr)
 
