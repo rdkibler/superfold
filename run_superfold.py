@@ -1,5 +1,4 @@
-#!/home/rdkibler/.conda/envs/pyroml/bin/python3.8
-
+__author__ = "Ryan Kibler, Sergey Ovchinnikov, Nate Bennet, Philip Leung, Adam Broerman"  # TODO others?
 # most of the code is copied from krypton's colabfold https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
 # The initial guess stuff is from Nate Bennett with maybe some helper code from Adam Broerman
 # pae code is lifted from Nate
@@ -61,30 +60,29 @@ parser.add_argument(
     help="Paths to PDB files or FASTA files to run AlphaFold2 predictions on.",
 )
 
-parser.add_argument(
-    "--pad_lengths",
-    action="store_true",
-    help="compile the model once to the longest input PDB and pad the remaining sequences. Ryan is unsure how this affects prediction accuracy, but it will speed up multiple prediction.",
-)
+# could try using a type here (like input files) to assert that the value is greater than 1. Instead right now we assert below.
 parser.add_argument(
     "--mock_msa_depth",
-    default=512,
-    help="fake the msa. Default = 512. to go fast, use 1",
+    default=1,
+    help="fake the msa. Lower is faster, but potentially less accurate. Range [1,inf). AF2 default is 512. Our Default = 1.",
     type=int,
 )
+
 parser.add_argument(
     "--models",
     choices=["1", "2", "3", "4", "5", "all"],
-    default="4",
+    default="all",
     nargs="+",
-    help="Deepmind provided five sets of weights/models. You can choose any combination of models to run. The model number 5 has been found (by aivan) to perform the best on single sequences so this is the default, but using multiple models might provide you with a relevent ensemble of structures.",
+    help="Deepmind provided five sets of weights/models. You can choose any combination of models to run.",
 )
+
 parser.add_argument(
     "--type",
     choices=["monomer", "monomer_ptm", "multimer"],
     default="monomer_ptm",
     help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. The use of multimer weights with standard AF2 probably won't work",
 )
+
 parser.add_argument(
     "--version",
     choices=["monomer", "multimer"],
@@ -92,50 +90,62 @@ parser.add_argument(
     help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' version is equivalent to AF2-Multimer and should not be used with the monomer weight types.",
 )
 
-
 parser.add_argument(
     "--nstruct",
     help="Number of independent outputs to generate PER MODEL. It will make predictions with seeds starting at 'seed_start' and increasing by one until n outputs are generated (like seed_range = range(seed_start,seed_start + nstruct)). Default=1",
     default=1,
     type=int,
 )
+
 parser.add_argument(
     "--seed_start", type=int, help="Seed to start at. Default=0", default=0
 )
+
 parser.add_argument(
     "--num_ensemble",
     type=int,
     default=1,
     help="number of times to process the input features and combine. default = 1. Deepmind used 8 for casp. Expert Option.",
 )
-parser.add_argument(
-    "--turbo",
-    action="store_true",
-    help="use the latest and greatest hacks to make it run fast fast fast.",
-)
+
 parser.add_argument(
     "--max_recycles",
     type=int,
     default=3,
     help="max number of times to run evoformer. Default is 3. Single domain proteins need fewer runs. Multidomain or PPI may need more",
 )
+
 parser.add_argument(
     "--recycle_tol",
     type=float,
     default=0.0,
     help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)",
 )
+
+# #An idea in current colab fold.
+# parser.add_argument(
+#     "--prediction_threshold",
+#     nargs=2,
+#     metavar=('value','type'),
+#     help="Continue recycling until the prediction is above the threshold or the num_recycles == max_recycles. Type choices are ['mean_plddt','mean_pae','rmsd_prev']",
+# )
+
+# unknown if this currently works
 parser.add_argument("--show_images", action="store_true")
+
 parser.add_argument(
     "--output_pae",
     action="store_true",
     help="dump the PAE matrix to disk. This is useful for investigating interresidue relationships.",
 )
+
+# unknown if this currently works
 parser.add_argument(
     "--save_intermediates",
     action="store_true",
     help="save intermediate structures between recycles. This is useful for making folding movies/trajectories",
 )
+
 parser.add_argument(
     "--amber_relax",
     action="store_true",
@@ -148,14 +158,17 @@ parser.add_argument(
 )
 parser.add_argument(
     "--initial_guess",
-    action="store_true",
-    help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation.",
+    nargs="?",
+    const=True,
+    default=False,
+    help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation. If no path is provided, the input_file must be a PDB or silent. If a path is provided, the input must be a fasta.",
 )
 parser.add_argument(
     "--reference_pdb",
     type=str,
     help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
 )
+
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
@@ -171,7 +184,6 @@ parser.add_argument(
     default=0.15,
     help="percent of sequence to make during inference. Default = 0.15. Setting to 0 might reduce prediction stocasticity.",
 )
-# parser.add_argument("--deepaccnet",action="store_true",help="Run DeepAccNet on the AlphaFold2 outputs.")
 
 parser.add_argument(
     "--out_dir",
@@ -182,17 +194,20 @@ parser.add_argument(
 
 args = parser.parse_args()
 
+assert args.mock_msa_depth > 0
 
-import os
+from pathlib import Path
 import pymol
-import silent_tools
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "silent_tools"))
+import silent_tools  # installed as a submodule
 from dataclasses import dataclass
 from typing import Union, Tuple, Dict
 import numpy as np
 from matplotlib import pyplot as plt
 
 plt.switch_backend("agg")
-import time
 
 os.makedirs(args.out_dir, exist_ok=True)
 
@@ -293,6 +308,7 @@ def get_chain_permutations(chains: list) -> list:
     return list(itertools.permutations(chains))
 
 
+# TODO refactor this code to only rearrange identical sequences to find better fits.
 def pymol_multichain_align(
     model_pymol_name: str, reference_pymol_name: str, alignment_mode: str = "align"
 ) -> Tuple[float, str, list]:
@@ -376,11 +392,6 @@ class PredictionTarget:
 
     def __len__(self):
         return len(self.seq.replace("/", ""))
-
-    def padseq(self, pad_amt):
-        return PredictionTarget(
-            self.name, self.seq + "U" * pad_amt, self.pymol_obj_name
-        )
 
 
 def parse_fasta(path):
@@ -498,7 +509,6 @@ from alphafold.model import model
 from alphafold.model import config
 from alphafold.model import data
 from alphafold.common import protein
-
 from alphafold.data import parsers
 
 # I don't know if this is a good idea.
@@ -540,42 +550,14 @@ if longest < 400 and device != "cpu":
     # catch the user's eye
     plural = "s are" if len(query_targets) > 1 else " is"
     print(
-        "======================================================================================="
+        "=======================================================================================\n"
+        + f"WARNING: Your query{plural} shorter than 400 residues. This is a very small protein.\n"
+        + "You may want to use the CPU to conserve GPU resources for those who need them.\n"
+        + "Remember that you can launch far more jobs in parallel on CPUs than you can on GPUs...\n"
+        + "See this example of how prediction time scales on CPU vs GPU: \n"
+        + "https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY\n"
+        + "======================================================================================="
     )
-    print(
-        f"WARNING: Your query{plural} shorter than 400 residues. This is a very small protein."
-    )
-    print(
-        "You may want to use the CPU to conserve GPU resources for those who need them."
-    )
-    print(
-        "Remember that you can launch far more jobs in parallel on CPUs than you can on GPUs..."
-    )
-    print("See this example of how prediction time scales on CPU vs GPU: ")
-    print(
-        "https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY"
-    )
-    print(
-        "======================================================================================="
-    )
-
-if args.pad_lengths:
-    # I don't htink this is the best implememntation wrt the use of "U" to pad
-    query_targets = [tgt.padseq(longest - len(tgt)) for tgt in query_targets]
-
-
-length_dict = defaultdict(lambda: [])
-for tgt in query_targets:
-    length_dict[len(tgt)].append(tgt)
-
-# sort so longer first so it fails early
-lengths = sorted(length_dict.keys(), reverse=True)
-
-if args.pad_lengths:
-    assert len(lengths) == 1
-
-prev_compile_settings = tuple()
-
 
 seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 
@@ -583,6 +565,76 @@ seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 if args.initial_guess and args.version == "multimer":
     print("WARNING: initial guess and multimer are not compatible. ")
     exit(1)
+
+# TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
+if type(args.initial_guess) == str:  # check input_file type
+    if ".pdb" in args.input_files[0]:
+        print("WARNING: initial guess was provided a PDB and input_file was a PDB")
+        print(
+            "No followup argument is needed for initial guess when input_file is a PDB"
+        )
+        exit(1)
+    elif ".silent" in args.input_files[0]:
+        print("WARNING: initial guess was provided a PDB and input_file was a .silent")
+        print(
+            "No followup argument is needed for initial guess when input_file is a silent"
+        )
+        exit(1)
+    else:
+        pass
+else:
+    pass
+if ".fa" in args.input_files[0]:
+    if args.initial_guess is True:
+        print("WARNING: initial guess needs a PDB if input_file was a fasta")
+        exit(1)
+    else:
+        pass
+else:
+    pass
+
+
+# blatently stolen from https://github.com/sokrypton/ColabFold/blob/8e6b6bb582f40a4fea06b19fc001d3d9ca208197/colabfold/alphafold/msa.py#L15
+# by konstin i think
+# no worries, I plan on going and actually forking colabfold eventually.
+from alphafold.model.features import FeatureDict
+from alphafold.model.tf import shape_placeholders
+import tensorflow as tf
+from typing import Mapping, Any
+
+NUM_RES = shape_placeholders.NUM_RES
+NUM_MSA_SEQ = shape_placeholders.NUM_MSA_SEQ
+NUM_EXTRA_SEQ = shape_placeholders.NUM_EXTRA_SEQ
+NUM_TEMPLATES = shape_placeholders.NUM_TEMPLATES
+
+
+def make_fixed_size(feat, runner, max_length):
+    """pad input features"""
+    cfg = runner.config
+    shape_schema = {k: [None] + v for k, v in dict(cfg.data.eval.feat).items()}
+    pad_size_map = {
+        shape_placeholders.NUM_RES: max_length,
+        shape_placeholders.NUM_MSA_SEQ: cfg.data.eval.max_msa_clusters,
+        shape_placeholders.NUM_EXTRA_SEQ: cfg.data.common.max_extra_msa,
+        shape_placeholders.NUM_TEMPLATES: 0,
+    }
+    for k, v in feat.items():
+        # Don't transfer this to the accelerator.
+        if k == "extra_cluster_assignment":
+            continue
+        shape = list(v.shape)
+
+        schema = shape_schema[k]
+        assert len(shape) == len(schema), (
+            f"Rank mismatch between shape and shape schema for {k}: "
+            f"{shape} vs {schema}"
+        )
+        pad_size = [pad_size_map.get(s2, None) or s1 for (s1, s2) in zip(shape, schema)]
+        padding = [(0, p - tf.shape(v)[i]) for i, p in enumerate(pad_size)]
+        if padding:
+            feat[k] = tf.pad(v, padding, name=f"pad_to_fixed_{k}")
+            feat[k].set_shape(pad_size)
+    return {k: np.asarray(v) for k, v in feat.items()}
 
 
 #######################################################################################################################
@@ -716,561 +768,435 @@ if args.reference_pdb is not None:
     reference_pdb_name = "REFERENCE"
     pymol.cmd.load(args.reference_pdb, reference_pdb_name)
 
+#### load up initial guess pdb, if present
+if type(args.initial_guess) == str:
+    initial_guess_name = "INITIAL_GUESS"
+    pymol.cmd.load(args.initial_guess, initial_guess_name)
+
+    # check that all the provided fasta sequences are the same length
+    initial_guess_length = pymol.cmd.count_atoms(initial_guess_name + " and name CA")
+    for tgt in query_targets:
+        if len(tgt) != initial_guess_length:
+            raise ValueError(
+                f"All provided fasta sequences must be the same length as the initial guess structure in order to use initial guess with fasta inputs. Initial guess length: {initial_guess_length}, {tgt.name} length: {len(tgt)}"
+            )
+
+
 ######################################
 
+max_length = max([len(tgt) for tgt in query_targets])
+
+
+if args.type == "multimer":
+    model_name = "model_5_multimer"
+else:
+    model_name = "model_5_ptm" if args.type == "monomer_ptm" else "model_5"
+
+if "all" in args.models:
+    model_names = ["model_1", "model_2", "model_3", "model_4", "model_5"]
+else:
+    model_names = [f"model_{model_num}" for model_num in args.models]
+
+
+cfg = config.model_config(model_name)
+params = data.get_model_haiku_params(model_name, data_dir=ALPHAFOLD_DATADIR)
+
+if args.version == "multimer":
+    cfg.model.num_ensemble_eval = args.num_ensemble
+    # cfg.model.embeddings_and_evoformer.num_extra_msa = args.mock_msa_depth
+    cfg.model.embeddings_and_evoformer.masked_msa.replace_fraction = args.pct_seq_mask
+
+    # templates are enabled by default, but I'm not supplying them, so disable
+    cfg.model.embeddings_and_evoformer.template.enabled = False
+
+else:
+    cfg.data.eval.num_ensemble = args.num_ensemble
+    cfg.data.eval.max_msa_clusters = args.mock_msa_depth
+    cfg.data.common.max_extra_msa = args.mock_msa_depth
+    cfg.data.eval.masked_msa_replace_fraction = args.pct_seq_mask
+    cfg.data.common.num_recycle = args.max_recycles
+    cfg.model.embeddings_and_evoformer.initial_guess = bool(
+        args.initial_guess
+    )  # new for initial guessing
+    # do I also need to turn on template?
+
+cfg.model.recycle_tol = args.recycle_tol
+cfg.model.num_recycle = args.max_recycles
+
+
+model_runner = model.RunModel(
+    cfg,
+    params,
+    is_training=args.enable_dropout,
+    return_representations=args.save_intermediates,
+)
 
 with tqdm.tqdm(total=len(query_targets)) as pbar1:
-    for length in lengths:
-        cohort = length_dict[length]
-        for target in cohort:
-            pbar1.set_description(f"Input: {target.name}")
+    for target in query_targets:
+        pbar1.set_description(f"Input: {target.name}")
 
-            # this is a lazy hack to avoid replacing var names.
-            full_sequence = target.seq.replace("/", "")
-            query_sequences = target.seq.split("/")
-            name = target.name
+        # this is a lazy hack to avoid replacing var names.
+        full_sequence = target.seq.replace("/", "")
+        query_sequences = target.seq.split("/")
+        name = target.name
 
-            pad_mask = np.array([c != "U" for c in full_sequence])
+        #############################
+        # define input features
+        #############################
 
-            #############################
-            # define input features
-            #############################
+        # I anticipate a bug where the initial guess is not long enough
+        if not args.initial_guess:  # initial guess is False by default
+            initial_guess = None
+        elif type(args.initial_guess) == str:  # use the provided pdb
+            initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
+        else:  # use the target structure
+            initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
 
-            num_res = len(full_sequence)
-            feature_dict = {}
-            msas = [parsers.Msa([full_sequence], [[0] * len(full_sequence)], [name])]
-            # deletion_matrices = [[[0]*len(full_sequence)]]
+        num_res = len(full_sequence)
+        feature_dict = {}
+        msas = [parsers.Msa([full_sequence], [[0] * len(full_sequence)], [name])]
 
-            if args.version == "multimer":
+        if args.version == "multimer":
 
-                feature_dict = pipeline_multimer.DataPipelineFaker().process(
-                    query_sequences
+            feature_dict = pipeline_multimer.DataPipelineFaker().process(
+                query_sequences
+            )
+        else:
+            feature_dict.update(
+                pipeline.make_sequence_features(full_sequence, name, num_res)
+            )
+            feature_dict.update(pipeline.make_msa_features(msas))
+
+            Ls = [len(chain_seq) for chain_seq in query_sequences]
+            Ls_plot = sum([[len(seq)] for seq in query_sequences], [])
+            # this introduces a bug where the plot just doesn't work for multimer version
+
+            feature_dict["residue_index"] = cf.chain_break(
+                feature_dict["residue_index"], Ls
+            )
+
+            if args.initial_guess:
+                feature_dict.update(mk_mock_template(query_sequences))
+
+        ###########################
+        # run alphafold
+        ###########################
+        def parse_results(prediction_result, processed_feature_dict):
+
+            # figure note... it would be nice to use prediction_result["structure_module"]["final_atom_mask"] to mask out everything in prediction_result that shouldn't be there due to padding.
+            b_factors = (
+                prediction_result["plddt"][:, None]
+                * prediction_result["structure_module"][
+                    "final_atom_mask"
+                ]  # I think not needed b/c I truncated the vector earlier
+            )
+
+            # but for now let's focus on truncating the results we most care about to the length of the target sequence
+            prediction_result["plddt"] = prediction_result["plddt"][: len(target.seq)]
+            if "predicted_aligned_error" in prediction_result:
+                prediction_result["predicted_aligned_error"] = prediction_result[
+                    "predicted_aligned_error"
+                ][: len(target.seq), : len(target.seq)]
+
+            dist_bins = jax.numpy.append(0, prediction_result["distogram"]["bin_edges"])
+            dist_mtx = dist_bins[prediction_result["distogram"]["logits"].argmax(-1)]
+            contact_mtx = jax.nn.softmax(prediction_result["distogram"]["logits"])[
+                :, :, dist_bins < 8
+            ].sum(-1)
+
+            out = {
+                "unrelaxed_protein": protein.from_prediction(
+                    processed_feature_dict,
+                    prediction_result,
+                    b_factors=b_factors,
+                    remove_leading_feature_dimension=args.type != "multimer",
+                ),
+                "plddt": prediction_result["plddt"],
+                "mean_plddt": prediction_result["plddt"].mean(),
+                "dists": dist_mtx,
+                "adj": contact_mtx,
+            }
+
+            if "ptm" in prediction_result:
+                out.update(
+                    {
+                        "pae": prediction_result["predicted_aligned_error"],
+                        "pTMscore": prediction_result["ptm"],
+                    }
                 )
-            else:
-                feature_dict.update(
-                    pipeline.make_sequence_features(full_sequence, name, num_res)
+            if args.type == "multimer":
+                out.update(
+                    {
+                        "pTMscore": prediction_result["ptm"],
+                        "pae": prediction_result["predicted_aligned_error"],
+                        "iptm": prediction_result["iptm"],
+                    }
                 )
-                feature_dict.update(pipeline.make_msa_features(msas))
+            return out
 
-                Ls = [len(chain_seq) for chain_seq in query_sequences]
-                Ls_plot = sum([[len(seq)] for seq in query_sequences], [])
-                # this introduces a bug where the plot just doesn't work for multimer version
+        total = len(model_names) * len(seed_range)
 
-                feature_dict["residue_index"] = cf.chain_break(
-                    feature_dict["residue_index"], Ls
-                )
+        with tqdm.tqdm(total=total) as pbar2:
+            outs = {}
 
-                if args.initial_guess:
-                    feature_dict.update(mk_mock_template(query_sequences))
+            def report(key):
+                pbar2.update(n=1)
+                o = outs[key]
+                out_dict = {}
+                out_dict["mean_plddt"] = o["mean_plddt"]
 
-            ###########################
-            # run alphafold
-            ###########################
-            def parse_results(prediction_result, processed_feature_dict):
+                out_dict["recycles"] = o["recycles"]
+                out_dict["tol"] = o["tol"]
+                out_dict["model"] = key.split("_")[1]
+                out_dict["type"] = args.type
+                out_dict["seed"] = key.split("_")[-1]
 
-                b_factors = (
-                    prediction_result["plddt"][:, None]
-                    * prediction_result["structure_module"]["final_atom_mask"]
-                )
-                dist_bins = jax.numpy.append(
-                    0, prediction_result["distogram"]["bin_edges"]
-                )
-                dist_mtx = dist_bins[
-                    prediction_result["distogram"]["logits"].argmax(-1)
-                ]
-                contact_mtx = jax.nn.softmax(prediction_result["distogram"]["logits"])[
-                    :, :, dist_bins < 8
-                ].sum(-1)
+                output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
+                if args.type == "monomer_ptm" or args.type == "multimer":
+                    output_line += f" pTMscore:{o['pTMscore']:.2f}"
 
-                out = {
-                    "unrelaxed_protein": protein.from_prediction(
-                        processed_feature_dict,
-                        prediction_result,
-                        b_factors=b_factors,
-                        remove_leading_feature_dimension=args.type != "multimer",
-                    ),
-                    "plddt": prediction_result["plddt"],
-                    "mean_plddt": prediction_result["plddt"].mean(),
-                    "dists": dist_mtx,
-                    "adj": contact_mtx,
+                prefix = f"{name}_{key}"
+                fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
+
+                output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
+                with open("debug.pdb", "w") as f:
+                    f.write(output_pdbstr)
+
+                output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
+                output_pdbstr = renumber(output_pdbstr)
+
+                import string
+
+                alphabet = string.ascii_uppercase
+                chain_range_map = get_chain_range_map(output_pdbstr)
+
+                num_chains = len(chain_range_map)
+
+                final_chain_order = list(
+                    alphabet[:num_chains]
+                )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
+
+                if args.reference_pdb is not None:
+                    pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
+                    rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                        "temp_target", reference_pdb_name, "super"
+                    )  # use super here b/c sequence is not guaranteed to be very similar
+
+                    out_dict["rmsd_to_reference"] = rmsd
+                    pymol.cmd.delete("temp_target")
+                    output_line += f" rmsd_to_reference:{rmsd:0.2f}"
+
+                if target.pymol_obj_name is not None:
+                    # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
+                    pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
+                    rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                        "temp_target", target.pymol_obj_name
+                    )
+
+                    out_dict["rmsd_to_input"] = rmsd
+                    pymol.cmd.delete("temp_target")
+                    output_line += f" rmsd_to_input:{rmsd:0.2f}"
+
+                with open(fout_name, "w") as f:
+                    f.write(output_pdbstr)
+
+                final_chain_order_mapping = {
+                    old_chain: new_chain
+                    for old_chain, new_chain in zip(alphabet, final_chain_order)
                 }
 
-                if "ptm" in prediction_result:
-                    out.update(
-                        {
-                            "pae": prediction_result["predicted_aligned_error"],
-                            "pTMscore": prediction_result["ptm"],
-                        }
-                    )
-                if args.type == "multimer":
-                    out.update(
-                        {
-                            "pTMscore": prediction_result["ptm"],
-                            "pae": prediction_result["predicted_aligned_error"],
-                            "iptm": prediction_result["iptm"],
-                        }
-                    )
-                return out
+                import itertools
 
-            if args.models[0] == "all":
-                model_names = ["model_1", "model_2", "model_3", "model_4", "model_5"]
-            else:
-                model_names = [f"model_{model_num}" for model_num in args.models]
+                if args.type == "monomer_ptm":
+                    # calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
+                    pae = o["pae"]
 
-            total = len(model_names) * len(seed_range)
+                    # first, truncate the matrix to the full length of the sequence (without chainbreak characters "/"). It can sometimes be too long because of padding inputs
+                    sequence_length = len(target.seq.replace("/", "").replace("U", ""))
+                    pae = pae[:sequence_length, :sequence_length]
 
-            with tqdm.tqdm(total=total) as pbar2:
-                #######################################################################
-                # precompile model and recompile only if length changes
-                #######################################################################
-                if args.turbo:
-                    if args.type == "multimer":
-                        model_name = "model_5_multimer"
-                    else:
-                        model_name = (
-                            "model_5_ptm" if args.type == "monomer_ptm" else "model_5"
+                    if args.output_pae:
+                        out_dict["pae"] = pae
+
+                    interaction_paes = []
+                    for chain_1, chain_2 in itertools.permutations(
+                        final_chain_order, 2
+                    ):
+                        chain_1_range_start, chain_1_range_stop = chain_range_map[
+                            chain_1
+                        ]
+                        chain_2_range_start, chain_2_range_stop = chain_range_map[
+                            chain_2
+                        ]
+
+                        final_chain_1 = final_chain_order_mapping[chain_1]
+                        final_chain_2 = final_chain_order_mapping[chain_2]
+                        interaction_pae = np.mean(
+                            pae[
+                                chain_1_range_start:chain_1_range_stop,
+                                chain_2_range_start:chain_2_range_stop,
+                            ]
                         )
+                        interaction_paes.append(interaction_pae)
+                        out_dict[
+                            f"mean_pae_interaction_{final_chain_1}{final_chain_2}"
+                        ] = interaction_pae
 
-                    N = len(feature_dict["msa"])
-                    L = len(feature_dict["residue_index"])
-                    compile_settings = (
-                        N,
-                        L,
-                        args.type,
-                        args.max_recycles,
-                        args.recycle_tol,
-                        args.num_ensemble,
-                        args.mock_msa_depth,
-                        args.enable_dropout,
-                        args.pct_seq_mask,
-                        args.initial_guess,
+                    # average all the interaction PAEs
+                    out_dict["mean_pae_interaction"] = np.mean(interaction_paes)
+
+                    # calculate mean intra-chain PAE per chain
+                    intra_chain_paes = []
+                    for chain in alphabet[:num_chains]:
+                        chain_range_start, chain_range_stop = chain_range_map[chain]
+                        intra_chain_pae = np.mean(
+                            pae[
+                                chain_range_start:chain_range_stop,
+                                chain_range_start:chain_range_stop,
+                            ]
+                        )
+                        intra_chain_paes.append(intra_chain_pae)
+                        out_dict[f"mean_pae_intra_chain_{chain}"] = intra_chain_pae
+
+                    # average all the intrachain PAEs
+                    out_dict["mean_pae_intra_chain"] = np.mean(intra_chain_paes)
+
+                    # average all the PAEs
+                    out_dict["mean_pae"] = np.mean(pae)
+
+                    out_dict["pTMscore"] = o["pTMscore"]
+                elif args.type == "multimer":
+                    out_dict["ptm"] = o["pTMscore"]
+                    out_dict["iptm"] = o["iptm"]
+
+                if args.show_images:
+                    fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
+                    plt.savefig(
+                        os.path.join(args.out_dir, f"{prefix}.png"),
+                        bbox_inches="tight",
+                    )
+                    plt.close(fig)
+
+                if args.amber_relax:
+                    # Relax the prediction.
+                    relaxed_pdb_str, _, _ = amber_relaxer.process(
+                        prot=o["unrelaxed_protein"]
                     )
 
-                    recompile = prev_compile_settings != compile_settings
+                    # Save the relaxed PDB.
+                    relaxed_output_path = os.path.join(
+                        args.out_dir, f"relaxed_{model_name}.pdb"
+                    )
+                    with open(relaxed_output_path, "w") as f:
+                        f.write(relaxed_pdb_str)
 
-                    if recompile:
-                        cf.clear_mem(device)  ##is this ok?
-                        cfg = config.model_config(model_name)
+                # np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
 
-                        if args.version == "multimer":
-                            cfg.model.num_ensemble_eval = args.num_ensemble
-                            # cfg.model.embeddings_and_evoformer.num_extra_msa = args.mock_msa_depth
-                            cfg.model.embeddings_and_evoformer.masked_msa.replace_fraction = (
-                                args.pct_seq_mask
-                            )
+                # cast devicearray to serializable type
+                for key in out_dict:
+                    out_dict[key] = np.array(out_dict[key]).tolist()
 
-                            # templates are enabled by default, but I'm not supplying them, so disable
-                            cfg.model.embeddings_and_evoformer.template.enabled = False
+                import json
 
-                        else:
-                            cfg.data.eval.num_ensemble = args.num_ensemble
-                            cfg.data.eval.max_msa_clusters = args.mock_msa_depth
-                            cfg.data.common.max_extra_msa = args.mock_msa_depth
-                            cfg.data.eval.masked_msa_replace_fraction = (
-                                args.pct_seq_mask
-                            )
-                            cfg.data.common.num_recycle = args.max_recycles
-                            cfg.model.embeddings_and_evoformer.initial_guess = (
-                                args.initial_guess
-                            )  # new for initial guessing
-                            # do I also need to turn on template?
+                # output as nicely formatted json
+                global time_checkpoint
+                elapsed_time = time.time() - time_checkpoint
+                output_line += f" elapsed time (s): {elapsed_time}"
+                with open("reports.txt", "a") as f:
+                    f.write(output_line + "\n")
+                print(output_line)
 
-                        cfg.model.recycle_tol = args.recycle_tol
-                        cfg.model.num_recycle = args.max_recycles
+                out_dict["elapsed_time"] = elapsed_time
 
-                        if args.initial_guess:
-                            initial_guess = af2_all_atom_pymol_object_name(
-                                target.pymol_obj_name
-                            )
-                        else:
-                            initial_guess = None
+                with open(
+                    os.path.join(args.out_dir, f"{prefix}_prediction_results.json"),
+                    "w",
+                ) as f:
+                    json.dump(out_dict, f, indent=2)
 
-                        params = data.get_model_haiku_params(
-                            model_name, data_dir=ALPHAFOLD_DATADIR
-                        )
+                time_checkpoint = time.time()
 
-                        # hack to bandaid initial guess w/ multimer
-                        if args.initial_guess:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
-                                initial_guess=initial_guess,
-                            )
-                        else:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
-                            )
+            #######################################################################
 
-                        prev_compile_settings = compile_settings
-                        recompile = False
+            # go through each random_seed
+            for seed in seed_range:
 
-                else:
-                    # cf.clear_mem(device) #is this ok
-                    recompile = True
+                # prep input features
+                processed_feature_dict = model_runner.process_features(
+                    feature_dict, random_seed=seed
+                )
 
-                # cleanup
-                if "outs" in dir():
-                    del outs
-                outs = {}
-                # cf.clear_mem(device)   #is this ok?
+                # pad input features
+                # Pad sequences to the same length
+                ##sequence padding
+                # I'm not sure if this is compatible with multimer version or not, but I'll stick it here for now
+                # model_config = model_runner.config
+                # eval_cfg = model_config.data.eval
+                # crop_feats = {k: [None] + v for k, v in dict(eval_cfg.feat).items()}
+                # print(crop_feats)
+                # feature_dict = make_fixed_size(
+                #     feature_dict,
+                #     crop_feats,
+                #     args.mock_msa_depth,
+                #     args.mock_msa_depth,
+                #     max_length,
+                # )
+                processed_feature_dict = make_fixed_size(
+                    processed_feature_dict, model_runner, max_length
+                )
 
-                #######################################################################
-
-                def report(key):
-                    pbar2.update(n=1)
-                    o = outs[key]
-                    out_dict = {}
-                    out_dict["mean_plddt"] = o["mean_plddt"]
-
-                    out_dict["recycles"] = o["recycles"]
-                    out_dict["tol"] = o["tol"]
-                    out_dict["model"] = key.split("_")[1]
-                    out_dict["type"] = args.type
-                    out_dict["seed"] = key.split("_")[-1]
-
-                    output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
-                    if args.type == "monomer_ptm" or args.type == "multimer":
-                        output_line += f" pTMscore:{o['pTMscore']:.2f}"
-
-                    prefix = f"{name}_{key}"
-                    fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
-
-                    output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
-                    output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
-                    output_pdbstr = renumber(output_pdbstr)
-
-                    import string
-
-                    alphabet = string.ascii_uppercase
-                    chain_range_map = get_chain_range_map(output_pdbstr)
-
-                    num_chains = len(chain_range_map)
-
-                    final_chain_order = list(
-                        alphabet[:num_chains]
-                    )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
-
-                    if args.reference_pdb is not None:
-                        pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", reference_pdb_name, "super"
-                        )  # use super here b/c sequence is not guaranteed to be very similar
-
-                        out_dict["rmsd_to_reference"] = rmsd
-                        pymol.cmd.delete("temp_target")
-                        output_line += f" rmsd_to_reference:{rmsd:0.2f}"
-
-                    if target.pymol_obj_name is not None:
-                        # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
-                        pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", target.pymol_obj_name
-                        )
-
-                        out_dict["rmsd_to_input"] = rmsd
-                        pymol.cmd.delete("temp_target")
-                        output_line += f" rmsd_to_input:{rmsd:0.2f}"
-
-                    with open(fout_name, "w") as f:
-                        f.write(output_pdbstr)
-
-                    final_chain_order_mapping = {
-                        old_chain: new_chain
-                        for old_chain, new_chain in zip(alphabet, final_chain_order)
-                    }
-
-                    import itertools
-
+                # go through each model
+                for num, model_name in enumerate(model_names):
+                    model_mod = ""
                     if args.type == "monomer_ptm":
-                        # calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
-                        pae = o["pae"]
-
-                        # first, truncate the matrix to the full length of the sequence (without chainbreak characters "/"). It can sometimes be too long because of padding inputs
-                        sequence_length = len(
-                            target.seq.replace("/", "").replace("U", "")
-                        )
-                        print("###################### DEGUB ######################")
-                        print(sequence_length)
-                        print(pae.shape)
-                        pae = pae[:sequence_length, :sequence_length]
-                        print(pae.shape)
-
-                        if args.output_pae:
-                            out_dict["pae"] = pae
-
-                        interaction_paes = []
-                        for chain_1, chain_2 in itertools.permutations(
-                            final_chain_order, 2
-                        ):
-                            chain_1_range_start, chain_1_range_stop = chain_range_map[
-                                chain_1
-                            ]
-                            chain_2_range_start, chain_2_range_stop = chain_range_map[
-                                chain_2
-                            ]
-
-                            final_chain_1 = final_chain_order_mapping[chain_1]
-                            final_chain_2 = final_chain_order_mapping[chain_2]
-                            interaction_pae = np.mean(
-                                pae[
-                                    chain_1_range_start:chain_1_range_stop,
-                                    chain_2_range_start:chain_2_range_stop,
-                                ]
-                            )
-                            interaction_paes.append(interaction_pae)
-                            out_dict[
-                                f"mean_pae_interaction_{final_chain_1}{final_chain_2}"
-                            ] = interaction_pae
-
-                        # average all the interaction PAEs
-                        out_dict["mean_pae_interaction"] = np.mean(interaction_paes)
-
-                        # calculate mean intra-chain PAE per chain
-                        intra_chain_paes = []
-                        for chain in alphabet[:num_chains]:
-                            chain_range_start, chain_range_stop = chain_range_map[chain]
-                            intra_chain_pae = np.mean(
-                                pae[
-                                    chain_range_start:chain_range_stop,
-                                    chain_range_start:chain_range_stop,
-                                ]
-                            )
-                            intra_chain_paes.append(intra_chain_pae)
-                            out_dict[f"mean_pae_intra_chain_{chain}"] = intra_chain_pae
-
-                        # average all the intrachain PAEs
-                        out_dict["mean_pae_intra_chain"] = np.mean(intra_chain_paes)
-
-                        # average all the PAEs
-                        out_dict["mean_pae"] = np.mean(pae)
-
-                        out_dict["pTMscore"] = o["pTMscore"]
+                        model_mod = "_ptm"
                     elif args.type == "multimer":
-                        out_dict["ptm"] = o["pTMscore"]
-                        out_dict["iptm"] = o["iptm"]
+                        model_mod = "_multimer"
+                    model_name = model_name + model_mod
+                    key = f"{model_name}_seed_{seed}"
+                    pbar2.set_description(f"Running {key}")
 
-                    if args.show_images:
-                        fig = cf.plot_protein(
-                            o["unrelaxed_protein"], Ls=Ls_plot, dpi=200
-                        )
-                        plt.savefig(
-                            os.path.join(args.out_dir, f"{prefix}.png"),
-                            bbox_inches="tight",
-                        )
-                        plt.close(fig)
+                    # check if this prediction/seed has already been done
+                    prefix = f"{name}_{key}"
+                    if not args.overwrite and os.path.exists(
+                        os.path.join(args.out_dir, f"{prefix}_prediction_results.json")
+                    ):
+                        print(f"{prefix}_prediction_results.json already exists")
+                        continue
 
-                    if args.amber_relax:
-                        # Relax the prediction.
-                        relaxed_pdb_str, _, _ = amber_relaxer.process(
-                            prot=o["unrelaxed_protein"]
-                        )
+                    # replace model parameters
+                    params = data.get_model_haiku_params(
+                        model_name, data_dir=ALPHAFOLD_DATADIR
+                    )
+                    for k in model_runner.params.keys():
+                        model_runner.params[k] = params[k]
 
-                        # Save the relaxed PDB.
-                        relaxed_output_path = os.path.join(
-                            args.out_dir, f"relaxed_{model_name}.pdb"
-                        )
-                        with open(relaxed_output_path, "w") as f:
-                            f.write(relaxed_pdb_str)
-
-                    # np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
-
-                    # cast devicearray to serializable type
-                    for key in out_dict:
-                        out_dict[key] = np.array(out_dict[key]).tolist()
-
-                    import json
-
-                    # output as nicely formatted json
-                    global time_checkpoint
-                    elapsed_time = time.time() - time_checkpoint
-                    output_line += f" elapsed time (s): {elapsed_time}"
-                    with open("reports.txt", "a") as f:
-                        f.write(output_line + "\n")
-                    print(output_line)
-
-                    out_dict["elapsed_time"] = elapsed_time
-
-                    with open(
-                        os.path.join(args.out_dir, f"{prefix}_prediction_results.json"),
-                        "w",
-                    ) as f:
-                        json.dump(out_dict, f, indent=2)
-
-                    time_checkpoint = time.time()
-
-                #######################################################################
-
-                if args.turbo:
-                    # go through each random_seed
-                    for seed in seed_range:
-
-                        # prep input features
-                        processed_feature_dict = model_runner.process_features(
-                            feature_dict, random_seed=seed
-                        )
-
-                        # go through each model
-                        for num, model_name in enumerate(model_names):
-                            model_mod = ""
-                            if args.type == "monomer_ptm":
-                                model_mod = "_ptm"
-                            elif args.type == "multimer":
-                                model_mod = "_multimer"
-                            model_name = model_name + model_mod
-                            key = f"{model_name}_seed_{seed}"
-                            pbar2.set_description(f"Running {key}")
-
-                            # check if this prediction/seed has already been done
-                            prefix = f"{name}_{key}"
-                            if not args.overwrite and os.path.exists(
-                                os.path.join(
-                                    args.out_dir, f"{prefix}_prediction_results.json"
-                                )
-                            ):
-                                print(
-                                    f"{prefix}_prediction_results.json already exists"
-                                )
-                                continue
-
-                            # replace model parameters
-                            params = data.get_model_haiku_params(
-                                model_name, data_dir=ALPHAFOLD_DATADIR
-                            )
-                            for k in model_runner.params.keys():
-                                model_runner.params[k] = params[k]
-
-                            # predict
-                            if args.initial_guess:
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict,
-                                        random_seed=seed,
-                                        initial_guess=initial_guess,
-                                    ),
-                                    device,
-                                )  # is this ok?
-                            else:
-                                # a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?).
-                                # the fix will be to update Multimer code to accept initial_guess deep down in the actual code
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict, random_seed=seed
-                                    ),
-                                    device,
-                                )  # is this ok?
-
-                            # save results
-                            outs[key] = parse_results(
-                                prediction_result, processed_feature_dict
-                            )
-                            outs[key].update({"recycles": r, "tol": t})
-                            report(key)
-
-                            del prediction_result, params
-                        del processed_feature_dict
-
-                else:
-                    # go through each model
-                    for num, model_name in enumerate(model_names):
-                        model_mod = ""
-                        if args.type == "monomer_ptm":
-                            model_mod = "_ptm"
-                        elif args.type == "multimer":
-                            model_mod = "_multimer"
-                        model_name = model_name + model_mod
-                        params = data.get_model_haiku_params(
-                            model_name, data_dir=ALPHAFOLD_DATADIR
-                        )
-                        cfg = config.model_config(model_name)
-
-                        if args.type == "multimer":
-                            cfg.data.num_ensemble_eval = args.num_ensemble
-                        else:
-                            cfg.data.common.num_recycle = args.max_recycles
-                            cfg.data.eval.num_ensemble = args.num_ensemble
-                            cfg.model.embeddings_and_evoformer.initial_guess = (
-                                args.initial_guess
-                            )  # new for initial guessing
-
-                        cfg.model.recycle_tol = args.recycle_tol
-                        cfg.model.num_recycle = args.max_recycles
-
-                        if args.initial_guess:
-                            initial_guess = af2_all_atom_pymol_object_name(
-                                target.pymol_obj_name
-                            )
-                        else:
-                            initial_guess = None
-
-                        if args.initial_guess:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
+                    # predict
+                    if args.initial_guess:
+                        prediction_result, (r, t) = cf.to(
+                            model_runner.predict(
+                                processed_feature_dict,
+                                random_seed=seed,
                                 initial_guess=initial_guess,
-                            )
-                        else:
-                            model_runner = model.RunModel(
-                                cfg,
-                                params,
-                                is_training=args.enable_dropout,
-                                return_representations=args.save_intermediates,
-                            )
+                            ),
+                            device,
+                        )  # is this ok?
+                    else:
+                        # a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?).
+                        # the fix will be to update Multimer code to accept initial_guess deep down in the actual code
+                        prediction_result, (r, t) = cf.to(
+                            model_runner.predict(
+                                processed_feature_dict, random_seed=seed
+                            ),
+                            device,
+                        )  # is this ok?
 
-                        # go through each random_seed
-                        for seed in seed_range:
-                            key = f"{model_name}_seed_{seed}"
-                            pbar2.set_description(f"Running {key}")
+                    # save results
+                    outs[key] = parse_results(prediction_result, processed_feature_dict)
+                    outs[key].update({"recycles": r, "tol": t})
+                    report(key)
 
-                            # check if this prediction/seed has already been done
-                            prefix = f"{name}_{key}"
-                            if not args.overwrite and os.path.exists(
-                                os.path.join(
-                                    args.out_dir, f"{prefix}_prediction_results.json"
-                                )
-                            ):
-                                print(
-                                    f"{prefix}_prediction_results.json already exists"
-                                )
-                                continue
+                    del prediction_result, params
+                del processed_feature_dict
 
-                            # print(feature_dict)
-                            processed_feature_dict = model_runner.process_features(
-                                feature_dict, random_seed=seed
-                            )
-                            if args.initial_guess:
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict,
-                                        random_seed=seed,
-                                        initial_guess=initial_guess,
-                                    ),
-                                    device,
-                                )  # is this ok?
-                            else:
-                                prediction_result, (r, t) = cf.to(
-                                    model_runner.predict(
-                                        processed_feature_dict, random_seed=seed
-                                    ),
-                                    device,
-                                )  # is this ok?
-
-                            # save results
-                            outs[key] = parse_results(
-                                prediction_result, processed_feature_dict
-                            )
-                            outs[key].update({"recycles": r, "tol": t})
-                            report(key)
-
-                            # cleanup
-                            del processed_feature_dict, prediction_result
-
-                        del params, model_runner, cfg
-
-            pbar1.update(1)
+        pbar1.update(1)

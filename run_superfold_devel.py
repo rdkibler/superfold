@@ -308,6 +308,7 @@ def get_chain_permutations(chains: list) -> list:
     return list(itertools.permutations(chains))
 
 
+# TODO refactor this code to only rearrange identical sequences to find better fits.
 def pymol_multichain_align(
     model_pymol_name: str, reference_pymol_name: str, alignment_mode: str = "align"
 ) -> Tuple[float, str, list]:
@@ -391,11 +392,6 @@ class PredictionTarget:
 
     def __len__(self):
         return len(self.seq.replace("/", ""))
-
-    # def padseq(self, pad_amt):
-    #     return PredictionTarget(
-    #         self.name, self.seq + "U" * pad_amt, self.pymol_obj_name
-    #     )
 
 
 def parse_fasta(path):
@@ -563,23 +559,6 @@ if longest < 400 and device != "cpu":
         + "======================================================================================="
     )
 
-# POOR LENGTH PADDING
-# I don't htink this is the best implememntation wrt the use of "U" to pad
-# query_targets = [tgt.padseq(longest - len(tgt)) for tgt in query_targets]
-
-
-# length_dict = defaultdict(lambda: [])
-# for tgt in query_targets:
-#     length_dict[len(tgt)].append(tgt)
-
-# # sort so longer first so it fails early
-# lengths = sorted(length_dict.keys(), reverse=True)
-
-# assert len(lengths) == 1
-
-# prev_compile_settings = tuple()
-
-
 seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 
 # initial guess and multimer are not compatible
@@ -627,44 +606,6 @@ NUM_RES = shape_placeholders.NUM_RES
 NUM_MSA_SEQ = shape_placeholders.NUM_MSA_SEQ
 NUM_EXTRA_SEQ = shape_placeholders.NUM_EXTRA_SEQ
 NUM_TEMPLATES = shape_placeholders.NUM_TEMPLATES
-
-
-# def make_fixed_size(
-#     protein: Mapping[str, Any],
-#     shape_schema,
-#     msa_cluster_size: int,
-#     extra_msa_size: int,
-#     num_res: int,
-# ) -> FeatureDict:
-#     """Guess at the MSA and sequence dimensions to make fixed size."""
-
-#     pad_size_map = {
-#         NUM_RES: num_res,
-#         NUM_MSA_SEQ: msa_cluster_size,
-#         NUM_EXTRA_SEQ: extra_msa_size,
-#         NUM_TEMPLATES: 0,
-#     }
-
-#     for k, v in protein.items():
-#         # Don't transfer this to the accelerator.
-#         if k == "extra_cluster_assignment":
-#             continue
-#         shape = list(v.shape)
-
-#         schema = shape_schema[k]
-
-#         assert len(shape) == len(schema), (
-#             f"Rank mismatch between shape and shape schema for {k}: "
-#             f"{shape} vs {schema}"
-#         )
-#         pad_size = [pad_size_map.get(s2, None) or s1 for (s1, s2) in zip(shape, schema)]
-#         padding = [(0, p - tf.shape(v)[i]) for i, p in enumerate(pad_size)]
-
-#         if padding:
-#             # TODO: alphafold's typing is wrong
-#             protein[k] = tf.pad(v, padding, name=f"pad_to_fixed_{k}")
-#             protein[k].set_shape(pad_size)
-#     return {k: np.asarray(v) for k, v in protein.items()}
 
 
 def make_fixed_size(feat, runner, max_length):
@@ -910,8 +851,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
         else:  # use the target structure
             initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
-
-        # TODO add an assertion to check that the initial guess and the target are the same length
 
         num_res = len(full_sequence)
         feature_dict = {}
