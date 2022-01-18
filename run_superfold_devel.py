@@ -139,6 +139,12 @@ parser.add_argument(
     help="dump the PAE matrix to disk. This is useful for investigating interresidue relationships.",
 )
 
+parser.add_argument(
+    "--output_summary",
+    action="store_true",
+    help="write a 1-line summary of each prediction to disk under output_dir named 'reports.txt'.",
+)
+
 # unknown if this currently works
 parser.add_argument(
     "--save_intermediates",
@@ -959,8 +965,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
 
                 output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
-                with open("debug.pdb", "w") as f:
-                    f.write(output_pdbstr)
 
                 output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
                 output_pdbstr = renumber(output_pdbstr)
@@ -1102,8 +1106,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 global time_checkpoint
                 elapsed_time = time.time() - time_checkpoint
                 output_line += f" elapsed time (s): {elapsed_time}"
-                with open("reports.txt", "a") as f:
-                    f.write(output_line + "\n")
+
+                if args.output_summary:
+                    with open(os.path.join(args.out_dir, "reports.txt"), "a") as f:
+                        f.write(output_line + "\n")
                 print(output_line)
 
                 out_dict["elapsed_time"] = elapsed_time
