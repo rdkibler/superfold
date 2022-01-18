@@ -20,12 +20,16 @@ TODO
 1) Download this git repo `$git clone git@github.com:rdkibler/superfold.git`
 2) `$cd superfold`
 3) [Download the alphafold weights](#model-parameters) or find an existing path to the weights
-4) `$realpath /path/to/alphafold/params/ > alphafold_weights.pth`
+4) `$realpath /path/to/alphafold_weights/ > alphafold_weights.pth`. "params/" should be a child dir of the alphafold_weights dir
 5) (optional, if you don't want to install pyrosetta) `$conda config --add channels https://username:password@conda.graylab.jhu.edu`
 use the username and password provided by Comotion when you licensed it. 
 This is technically optional because we don't currently use pyrosetta because
 of silent_tools, so you could remove the pyrosetta line from the .yml and be fine
 6) `$conda create --name pyroml --file pyroml.yml`
+7) `$source activate ~/.conda/envs/pyroml`
+8) `$pip install absl-py dm-tree tensorflow ml-collections`
+9) `$pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_releases.html`
+10) `$pip install dm-haiku 
 
 ### Model parameters
 
