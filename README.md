@@ -21,11 +21,7 @@ TODO
 2) `$cd superfold`
 3) [Download the alphafold weights](#model-parameters) or find an existing path to the weights
 4) `$realpath /path/to/alphafold/params/ > alphafold_weights.pth`
-5) Add the following to `~/.condarc`
-```
-channels:
-  - https://username:password@conda.graylab.jhu.edu
-```
+5) (optional, if you don't want to install pyrosetta) `$conda config --add channels https://username:password@conda.graylab.jhu.edu`
 use the username and password provided by Comotion when you licensed it. 
 This is technically optional because we don't currently use pyrosetta because
 of silent_tools, so you could remove the pyrosetta line from the .yml and be fine
