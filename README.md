@@ -17,6 +17,19 @@ TODO
 
 ## Installation
 
+1) Download this git repo `$git clone git@github.com:rdkibler/superfold.git`
+2) `$cd superfold`
+3) [Download the alphafold weights](#model-parameters) or find an existing path to the weights
+4) `$realpath /path/to/alphafold/params/ > alphafold_weights.pth`
+5) Add the following to `~/.condarc`
+```
+channels:
+  - https://username:password@conda.graylab.jhu.edu
+```
+use the username and password provided by Comotion when you licensed it. 
+This is technically optional because we don't currently use pyrosetta because
+of silent_tools, so you could remove the pyrosetta line from the .yml and be fine
+6) `$conda create --name pyroml --file pyroml.yml`
 
 ### Model parameters
 
