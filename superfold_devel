@@ -14,6 +14,10 @@ case $cluster in
 		python_interpreter="/global/cfs/cdirs/m3962/users/rdkibler/software/pyroml/bin/python3.8"
 	;;
 
+	janelia)
+		python_interpreter="/home/rdkibler/.conda/envs/pyroml/bin/python3.8"
+	;;
+
 	*)
 		echo "cluster not recognized"
 
