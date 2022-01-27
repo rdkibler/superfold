@@ -378,12 +378,17 @@ def convert_pdb_chainbreak_to_new_chain(pdbstring):
     new_pdbstring = ""
     import string
 
-    alphabet = string.ascii_uppercase
+    alphabet = string.ascii_uppercase + string.digits + string.ascii_lowercase
     for line in pdbstring.split("\n"):
         if line[:4] == "ATOM":
             resid = int(line[22:26])
             if resid - previous_resid > 1:
                 chain_num += 1
+                if chain_num >= len(alphabet):
+                    raise Exception(
+                        "Too many chains to convert to new chain format. "
+                        "Decrease the number of chains or increase the alphabet size."
+                    )
             new_pdbstring += line[:21] + f"{alphabet[chain_num]: >1}" + line[22:] + "\n"
             previous_resid = resid
         else:
@@ -975,7 +980,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                 import string
 
-                alphabet = string.ascii_uppercase
+                alphabet = string.ascii_uppercase + string.digits + string.ascii_lowercase
                 chain_range_map = get_chain_range_map(output_pdbstr)
 
                 num_chains = len(chain_range_map)
