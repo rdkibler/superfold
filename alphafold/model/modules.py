@@ -356,24 +356,24 @@ class AlphaFold(hk.Module):
                 ensemble_representations=ensemble_representations,
             )
 
-        if self.config.num_recycle:
-            emb_config = self.config.embeddings_and_evoformer
-
-            # Nate insertion
-            prev_pos = jnp.zeros([num_residues, residue_constants.atom_type_num, 3])
-
-            if emb_config.initial_guess:
+        #if no recycles are requested, keep the upstream work (hack from krypton)
+        emb_config = self.config.embeddings_and_evoformer
+        # Nate insertion
+        prev_pos = jnp.zeros([num_residues, residue_constants.atom_type_num, 3])
+        if emb_config.initial_guess:
                 prev_pos += initial_guess
+    
+        # we can implement per-recycle checkpointing by dumping and loading this dict! #TODO
+        prev = {
+            "prev_pos": prev_pos,
+            "prev_msa_first_row": jnp.zeros([num_residues, emb_config.msa_channel]),
+            "prev_pair": jnp.zeros(
+                [num_residues, num_residues, emb_config.pair_channel]
+            ),
+        }
 
-            # we can implement per-recycle checkpointing by dumping and loading this dict! #TODO
-            prev = {
-                "prev_pos": prev_pos,
-                "prev_msa_first_row": jnp.zeros([num_residues, emb_config.msa_channel]),
-                "prev_pair": jnp.zeros(
-                    [num_residues, num_residues, emb_config.pair_channel]
-                ),
-            }
 
+        if self.config.num_recycle:
             if "num_iter_recycling" in batch:
                 # Training time: num_iter_recycling is in batch.
                 # The value for each ensemble batch is the same, so arbitrarily taking
@@ -411,7 +411,6 @@ class AlphaFold(hk.Module):
                     (0, jnp.inf, prev),
                 )
         else:
-            prev = {}
             num_iter = 0
             (recycles, tol) = 0, jnp.inf
 

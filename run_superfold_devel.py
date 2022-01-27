@@ -174,7 +174,11 @@ parser.add_argument(
     type=str,
     help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
 )
-
+parser.add_argument(
+    "--keep_chain_order",
+    action="store_true"
+    help="turn off chain order updates. A hack to not mess up Adam's predictions. Also does not calculate RMSD.",
+)
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
@@ -980,7 +984,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     alphabet[:num_chains]
                 )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
 
-                if args.reference_pdb is not None:
+                if args.reference_pdb is not None and not args.keep_chain_order:
                     pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
                     rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
                         "temp_target", reference_pdb_name, "super"
@@ -990,7 +994,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
 
-                if target.pymol_obj_name is not None:
+                if target.pymol_obj_name is not None and not args.keep_chain_order:
                     # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
                     pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
                     rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
