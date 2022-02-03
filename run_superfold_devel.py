@@ -176,7 +176,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--keep_chain_order",
-    action="store_true"
+    action="store_true",
     help="turn off chain order updates. A hack to not mess up Adam's predictions. Also does not calculate RMSD.",
 )
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
@@ -980,7 +980,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                 import string
 
-                alphabet = string.ascii_uppercase + string.digits + string.ascii_lowercase
+                alphabet = (
+                    string.ascii_uppercase + string.digits + string.ascii_lowercase
+                )
                 chain_range_map = get_chain_range_map(output_pdbstr)
 
                 num_chains = len(chain_range_map)
