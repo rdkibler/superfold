@@ -101,7 +101,7 @@ The contents of each output file are as follows:
 ### Code contributors
 
 *   Ryan Kibler
-TODO finish contributors
+TODO finish contributors lol
 
 ### 3rd party libraries and packages
 SuperFold communicates with and/or references the following separate libraries
@@ -110,14 +110,9 @@ and packages:
 *   [Abseil](https://github.com/abseil/abseil-py)
 *   [Biopython](https://biopython.org)
 *   [Chex](https://github.com/deepmind/chex)
-*   [Colab](https://research.google.com/colaboratory/)
-*   [Docker](https://www.docker.com)
-*   [HH Suite](https://github.com/soedinglab/hh-suite)
-*   [HMMER Suite](http://eddylab.org/software/hmmer)
 *   [Haiku](https://github.com/deepmind/dm-haiku)
 *   [Immutabledict](https://github.com/corenting/immutabledict)
 *   [JAX](https://github.com/google/jax/)
-*   [Kalign](https://msa.sbc.su.se/cgi-bin/msa.cgi)
 *   [matplotlib](https://matplotlib.org/)
 *   [ML Collections](https://github.com/google/ml_collections)
 *   [NumPy](https://numpy.org)
@@ -131,7 +126,7 @@ and packages:
 *   [Tree](https://github.com/deepmind/tree)
 *   [tqdm](https://github.com/tqdm/tqdm)
 
-TODO: there are some that need to be added
+TODO: are there some that need to be added/removed?
 
 We thank all their contributors and maintainers!
 
