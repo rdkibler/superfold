@@ -175,6 +175,12 @@ parser.add_argument(
     help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
 )
 
+parser.add_argument(
+    "--simple_rmsd",
+    action="store_true",
+    help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders.",
+)
+
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
 # sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
 # sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
@@ -313,6 +319,20 @@ def get_chain_permutations(chains: list) -> list:
 
     return list(itertools.permutations(chains))
 
+def pymol_align(pymol_object_name: str, reference_pdb: str, alignmnet_mode: str = "align") -> float:
+    """
+    Naively align the output of alphafold to the reference pdb
+    """
+    import pymol
+
+    align_func = getattr(pymol.cmd, alignmnet_mode)
+    rmsd = align_func(
+        f"{pymol_object_name} and n. CA",
+        f"{reference_pdb} and n. CA",
+        cycles=0
+    )[0]
+
+    return rmsd
 
 # TODO refactor this code to only rearrange identical sequences to find better fits.
 def pymol_multichain_align(
@@ -985,22 +1005,34 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     alphabet[:num_chains]
                 )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
 
+                pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
                 if args.reference_pdb is not None:
-                    pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                    rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                        "temp_target", reference_pdb_name, "super"
-                    )  # use super here b/c sequence is not guaranteed to be very similar
+                    if args.simple_rmsd:
+                        rmsd = pymol_align(
+                            "temp_target",
+                            reference_pdb_name, "super"
+                        )
+                    else:
+                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                            "temp_target", reference_pdb_name, "super"
+                        )  # use super here b/c sequence is not guaranteed to be very similar
 
                     out_dict["rmsd_to_reference"] = rmsd
                     pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
 
                 if target.pymol_obj_name is not None:
-                    # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
-                    pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                    rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                        "temp_target", target.pymol_obj_name
-                    )
+                    if args.simple_rmsd:
+                        rmsd = pymol_align(
+                            "temp_target", target.pymol_obj_name
+                        )
+                    else:
+
+                        # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
+                        pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
+                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                            "temp_target", target.pymol_obj_name
+                        )
 
                     out_dict["rmsd_to_input"] = rmsd
                     pymol.cmd.delete("temp_target")
