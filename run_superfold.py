@@ -642,13 +642,27 @@ NUM_TEMPLATES = shape_placeholders.NUM_TEMPLATES
 def make_fixed_size(feat, runner, max_length):
     """pad input features"""
     cfg = runner.config
-    shape_schema = {k: [None] + v for k, v in dict(cfg.data.eval.feat).items()}
-    pad_size_map = {
-        shape_placeholders.NUM_RES: max_length,
-        shape_placeholders.NUM_MSA_SEQ: cfg.data.eval.max_msa_clusters,
-        shape_placeholders.NUM_EXTRA_SEQ: cfg.data.common.max_extra_msa,
-        shape_placeholders.NUM_TEMPLATES: 0,
-    }
+
+    if cfg.model.global_config.multimer_mode:
+        # shape_schema = ?
+        # pad_size_map = {
+        #     shape_placeholders.NUM_RES: max_length,
+        #     shape_placeholders.NUM_MSA_SEQ: cfg.model.embeddings_and_evoformer.num_msa,
+        #     shape_placeholders.NUM_EXTRA_SEQ: cfg.model.embeddings_and_evoformer.num_extra_msa,
+        #     shape_placeholders.NUM_TEMPLATES: 0,
+        # }
+        print("Warning: padding sequences in multimer mode is not implemented yet")
+        return feat
+    else:
+        shape_schema = {k: [None] + v for k, v in dict(cfg.data.eval.feat).items()}
+        pad_size_map = {
+            shape_placeholders.NUM_RES: max_length,
+            shape_placeholders.NUM_MSA_SEQ: cfg.data.eval.max_msa_clusters,
+            shape_placeholders.NUM_EXTRA_SEQ: cfg.data.common.max_extra_msa,
+            shape_placeholders.NUM_TEMPLATES: 0,
+        }
+
+
     for k, v in feat.items():
         # Don't transfer this to the accelerator.
         if k == "extra_cluster_assignment":
