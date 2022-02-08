@@ -592,10 +592,10 @@ if longest < 400 and device != "cpu":
 
 seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 
-# initial guess and multimer are not compatible
-if args.initial_guess and args.version == "multimer":
-    print("WARNING: initial guess and multimer are not compatible. ")
-    exit(1)
+# # initial guess and multimer are not compatible
+# if args.initial_guess and args.version == "multimer":
+#     print("WARNING: initial guess and multimer are not compatible. ")
+#     exit(1)
 
 # TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
 if type(args.initial_guess) == str:  # check input_file type
@@ -853,6 +853,10 @@ if args.version == "multimer":
 
     # templates are enabled by default, but I'm not supplying them, so disable
     cfg.model.embeddings_and_evoformer.template.enabled = False
+
+    cfg.model.embeddings_and_evoformer.initial_guess = bool(
+        args.initial_guess
+    )  # new for initial guessing
 
 else:
     cfg.data.eval.num_ensemble = args.num_ensemble

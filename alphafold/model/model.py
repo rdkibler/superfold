@@ -84,12 +84,13 @@ class RunModel:
         # TODO add the ability to return_representations for multimers
         if self.multimer_mode:
 
-            def _forward_fn(batch):
+            def _forward_fn(batch, initial_guess=None):
                 model = modules_multimer.AlphaFold(self.config.model)
                 return model(
                     batch,
                     is_training=is_training,
                     return_representations=return_representations,
+                    initial_guess=initial_guess,
                 )
 
         else:

@@ -518,6 +518,7 @@ CONFIG_MULTIMER = ml_collections.ConfigDict(
                 "msa_channel": 256,
                 "pair_channel": 128,
                 "prev_pos": {"max_bin": 20.75, "min_bin": 3.25, "num_bins": 15},
+                "initial_guess": False,
                 "recycle_features": True,
                 "recycle_pos": True,
                 "template": {

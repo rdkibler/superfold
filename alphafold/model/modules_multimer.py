@@ -438,7 +438,7 @@ class AlphaFold(hk.Module):
         self.config = config
         self.global_config = config.global_config
 
-    def __call__(self, batch, is_training, return_representations=False, safe_key=None):
+    def __call__(self, batch, is_training, return_representations=False, safe_key=None, initial_guess=None):
 
         c = self.config
         impl = AlphaFoldIteration(c, self.global_config)
@@ -467,8 +467,11 @@ class AlphaFold(hk.Module):
 
         if self.config.num_recycle:
             emb_config = self.config.embeddings_and_evoformer
+            prev_pos = jnp.zeros([num_res, residue_constants.atom_type_num, 3])
+            if emb_config.initial_guess:
+                prev_pos += initial_guess
             prev = {
-                "prev_pos": jnp.zeros([num_res, residue_constants.atom_type_num, 3]),
+                "prev_pos": prev_pos,
                 "prev_msa_first_row": jnp.zeros([num_res, emb_config.msa_channel]),
                 "prev_pair": jnp.zeros([num_res, num_res, emb_config.pair_channel]),
             }
