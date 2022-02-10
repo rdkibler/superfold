@@ -1144,7 +1144,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                     # Save the relaxed PDB.
                     relaxed_output_path = os.path.join(
-                        args.out_dir, f"relaxed_{model_name}.pdb"
+                        args.out_dir, f"{prefix}_relaxed.pdb"
                     )
                     with open(relaxed_output_path, "w") as f:
                         f.write(relaxed_pdb_str)
