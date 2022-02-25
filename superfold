@@ -11,7 +11,7 @@ case $cluster in
 	;;
 
 	perlmutter)
-		python_interpreter="/global/cfs/cdirs/m3962/users/rdkibler/software/pyroml/bin/python3.8"
+		python_interpreter="/global/cfs/cdirs/m4129/users/rdkibler/software/pyroml/bin/python3.8"
 	;;
 
 	janelia)
