@@ -12,7 +12,7 @@ import argparse
 
 # from Bio import SeqIO
 parser = argparse.ArgumentParser()
-subparsers = parser.add_subparsers()
+
 
 def validate_file(parser, path):
     """
@@ -38,17 +38,22 @@ def validate_file(parser, path):
             )
 
 
-
-
 #### PARSE IO ####
-io_parser = subparsers.add_parser("I/O")
+io_parser = parser.add_argument_group("I/O")
 
 io_parser.add_argument(
     "input_files",
     metavar="PATH",
     nargs="+",
     type=lambda x: validate_file(parser, x),
-    help="Paths to PDB files or FASTA files to run AlphaFold2 predictions on.",
+    help="Required. Paths to PDB files or FASTA files to run AlphaFold2 predictions on.",
+)
+
+io_parser.add_argument(
+    "--nstruct",
+    help="Number of independent outputs to generate PER MODEL. It will make predictions with seeds starting at 'seed_start' and increasing by one until n outputs are generated (like seed_range = range(seed_start,seed_start + nstruct)). Default=1",
+    default=1,
+    type=int,
 )
 
 io_parser.add_argument(
@@ -57,32 +62,46 @@ io_parser.add_argument(
     help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.",
 )
 
-parser.add_argument(
+io_parser.add_argument(
     "--out_dir",
     type=str,
     default="output/",
     help="Directory to output models and data.",
 )
 
-parser.add_argument(
+io_parser.add_argument(
     "--reference_pdb",
     type=str,
     help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
 )
 
+# unknown if this currently works
+io_parser.add_argument(
+    "--save_intermediates",
+    action="store_true",
+    help="save intermediate structures between recycles. This is useful for making folding movies/trajectories",
+)
+
+io_parser.add_argument(
+    "--output_summary",
+    nargs="?",
+    const="summary.txt",
+    default=False,
+    help="write a 1-line summary of each prediction to disk under output_dir named 'reports.txt', or the filename provided.",
+)
 
 #### PARSE ALPHAFOLD PARAMETERS ####
-af2_parser = subparsers.add_parser("Alphafold parameters")
+af2_parser = parser.add_argument_group("AlphaFold2 Parameters")
 
 # could try using a type here (like input files) to assert that the value is greater than 1. Instead right now we assert below.
-parser.add_argument(
+af2_parser.add_argument(
     "--mock_msa_depth",
     default=1,
     help="fake the msa. Lower is faster, but potentially less accurate. Range [1,inf). AF2 default is 512. Our Default = 1.",
     type=int,
 )
 
-parser.add_argument(
+af2_parser.add_argument(
     "--models",
     choices=["1", "2", "3", "4", "5", "all"],
     default="all",
@@ -90,91 +109,55 @@ parser.add_argument(
     help="Deepmind provided five sets of weights/models. You can choose any combination of models to run.",
 )
 
-parser.add_argument(
+af2_parser.add_argument(
     "--type",
     choices=["monomer", "monomer_ptm", "multimer"],
     default="monomer_ptm",
     help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. The use of multimer weights with standard AF2 probably won't work",
 )
 
-parser.add_argument(
+af2_parser.add_argument(
     "--version",
     choices=["monomer", "multimer"],
     default="monomer",
     help="DEPRECIATED. This option has no effect.",
 )
 
-parser.add_argument(
-    "--nstruct",
-    help="Number of independent outputs to generate PER MODEL. It will make predictions with seeds starting at 'seed_start' and increasing by one until n outputs are generated (like seed_range = range(seed_start,seed_start + nstruct)). Default=1",
-    default=1,
-    type=int,
-)
-
-parser.add_argument(
+af2_parser.add_argument(
     "--seed_start", type=int, help="Seed to start at. Default=0", default=0
 )
 
-parser.add_argument(
+af2_parser.add_argument(
     "--num_ensemble",
     type=int,
     default=1,
     help="number of times to process the input features and combine. default = 1. Deepmind used 8 for casp. Expert Option.",
 )
 
-parser.add_argument(
+af2_parser.add_argument(
     "--max_recycles",
     type=int,
     default=3,
     help="max number of times to run evoformer. Default is 3. Single domain proteins need fewer runs. Multidomain or PPI may need more",
 )
 
-parser.add_argument(
+af2_parser.add_argument(
     "--recycle_tol",
     type=float,
     default=0.0,
     help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)",
 )
 
-# #An idea in current colab fold that I still need to implement
-# parser.add_argument(
+# #An idea in current colab fold that I still need to implement. Will replace recycle_tol
+# af2_parser.add_argument(
 #     "--prediction_threshold",
 #     nargs=2,
 #     metavar=('value','type'),
-#     help="Continue recycling until the prediction is above the threshold or the num_recycles == max_recycles. Type choices are ['mean_plddt','mean_pae','rmsd_prev']",
+#     action="append"
+#     help="Continue recycling until the prediction meets the threshold or the num_recycles == max_recycles. Type choices are ['mean_plddt','mean_pae','rmsd_prev']. You may list multiple thresholds. Default is to not stop recycling until max_recycles are met.",
 # )
 
-# unknown if this currently works
-parser.add_argument("--show_images", action="store_true")
-
-parser.add_argument(
-    "--output_pae",
-    action="store_true",
-    help="dump the PAE matrix to disk. This is useful for investigating interresidue relationships.",
-)
-
-parser.add_argument(
-    "--output_summary",
-    action="store_true",
-    help="write a 1-line summary of each prediction to disk under output_dir named 'reports.txt'.",
-)
-
-# unknown if this currently works
-parser.add_argument(
-    "--save_intermediates",
-    action="store_true",
-    help="save intermediate structures between recycles. This is useful for making folding movies/trajectories",
-)
-
-
-
-parser.add_argument(
-    "--amber_relax",
-    action="store_true",
-    help="use AMBER to relax the structure after prediction",
-)
-
-parser.add_argument(
+af2_parser.add_argument(
     "--initial_guess",
     nargs="?",
     const=True,
@@ -182,29 +165,66 @@ parser.add_argument(
     help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation. If no path is provided, the input_file must be a PDB or silent. If a path is provided, the input must be a fasta.",
 )
 
-
-parser.add_argument(
-    "--simple_rmsd",
-    action="store_true",
-    help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders.",
-)
-
-# sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
-# sidechain_relax_parser.add_argument("--amber_relax",help="run Amber relax on each output prediction")
-# sidechain_relax_parser.add_argument("--rosetta_relax",help="run Rosetta relax (sidechain only) on each output prediction")
-
-parser.add_argument(
+af2_parser.add_argument(
     "--enable_dropout",
     action="store_true",
     help="Introduce structural diversity by enabling dropout",
 )
-parser.add_argument(
+af2_parser.add_argument(
     "--pct_seq_mask",
     type=float,
     default=0.15,
     help="percent of sequence to make during inference. Default = 0.15. Setting to 0 might reduce prediction stocasticity.",
 )
 
+#### PARSE EVALUATION PARAMETERS ####
+eval_parser = parser.add_argument_group("Evaluation")
+
+# unknown if this currently works
+eval_parser.add_argument("--show_images", action="store_true")
+
+eval_parser.add_argument(
+    "--output_pae",
+    action="store_true",
+    help="dump the PAE matrix to disk. This is useful for investigating interresidue relationships.",
+)
+
+relax_group = eval_parser.add_mutually_exclusive_group()
+relax_group.add_argument(
+    "--amber_relax",
+    action="store_true",
+    help="use AMBER to relax the structure after prediction",
+)
+
+relax_group.add_argument(
+    "--rosetta_relax",
+    action="store_true",
+    help="use Rosetta to relax the structure after prediction",
+)
+
+relax_group.add_argument(
+    "--rosetta_relax_sc",
+    action="store_true",
+    help="use Rosetta to relax the sidechains of the structure after prediction",
+)
+
+relax_group.add_argument(
+    "--rosetta_minimize",
+    action="store_true",
+    help="use Rosetta to minimize the structure after prediction",
+)
+
+relax_group.add_argument(
+    "--rosetta_minimize_sc",
+    action="store_true",
+    help="use Rosetta to minimize the sidechains of the structure after prediction",
+)
+
+eval_parser.add_argument(
+    "--simple_rmsd",
+    action="store_true",
+    help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders.",
+)
 
 
 args = parser.parse_args()
@@ -222,7 +242,6 @@ SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
 with open(f"{SCRIPTDIR}/alphafold_weights.pth", "r") as f:
     ALPHAFOLD_DATADIR = f.read().strip()
 assert os.path.exists(ALPHAFOLD_DATADIR)
-
 
 
 assert args.mock_msa_depth > 0
@@ -338,7 +357,10 @@ def get_chain_permutations(chains: list) -> list:
 
     return list(itertools.permutations(chains))
 
-def pymol_align(pymol_object_name: str, reference_pdb: str, alignmnet_mode: str = "align") -> float:
+
+def pymol_align(
+    pymol_object_name: str, reference_pdb: str, alignmnet_mode: str = "align"
+) -> float:
     """
     Naively align the output of alphafold to the reference pdb
     """
@@ -346,12 +368,11 @@ def pymol_align(pymol_object_name: str, reference_pdb: str, alignmnet_mode: str 
 
     align_func = getattr(pymol.cmd, alignmnet_mode)
     rmsd = align_func(
-        f"{pymol_object_name} and n. CA",
-        f"{reference_pdb} and n. CA",
-        cycles=0
+        f"{pymol_object_name} and n. CA", f"{reference_pdb} and n. CA", cycles=0
     )[0]
 
     return rmsd
+
 
 # TODO refactor this code to only rearrange identical sequences to find better fits.
 def pymol_multichain_align(
@@ -675,7 +696,6 @@ def make_fixed_size(feat, runner, max_length):
             shape_placeholders.NUM_EXTRA_SEQ: cfg.data.common.max_extra_msa,
             shape_placeholders.NUM_TEMPLATES: 0,
         }
-
 
     for k, v in feat.items():
         # Don't transfer this to the accelerator.
@@ -1028,7 +1048,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                 import string
 
-                alphabet = string.ascii_uppercase + string.digits + string.ascii_lowercase
+                alphabet = (
+                    string.ascii_uppercase + string.digits + string.ascii_lowercase
+                )
                 chain_range_map = get_chain_range_map(output_pdbstr)
 
                 num_chains = len(chain_range_map)
@@ -1040,10 +1062,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
                 if args.reference_pdb is not None:
                     if args.simple_rmsd:
-                        rmsd = pymol_align(
-                            "temp_target",
-                            reference_pdb_name, "super"
-                        )
+                        rmsd = pymol_align("temp_target", reference_pdb_name, "super")
                     else:
                         rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
                             "temp_target", reference_pdb_name, "super"
@@ -1055,9 +1074,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                 if target.pymol_obj_name is not None:
                     if args.simple_rmsd:
-                        rmsd = pymol_align(
-                            "temp_target", target.pymol_obj_name
-                        )
+                        rmsd = pymol_align("temp_target", target.pymol_obj_name)
                     else:
 
                         # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
