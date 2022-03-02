@@ -9,24 +9,10 @@ import time
 
 time_checkpoint = time.time()
 import argparse
-import os
 
 # from Bio import SeqIO
 parser = argparse.ArgumentParser()
-
-
-# This hack is probably unnecessary with AF2-multimer since they've switched to jax for feature processing
-# tell Jax and Tensorflow to use the same memory. This allows us to run larger structures
-os.environ["TF_FORCE_UNIFIED_MEMORY"] = "1"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "2.0"
-
-
-# let's use a linkfile-like strategy for telling the script where to find stuff like data
-SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
-with open(f"{SCRIPTDIR}/alphafold_weights.pth", "r") as f:
-    ALPHAFOLD_DATADIR = f.read().strip()
-assert os.path.exists(ALPHAFOLD_DATADIR)
-
+subparsers = parser.add_subparsers()
 
 def validate_file(parser, path):
     """
@@ -52,13 +38,41 @@ def validate_file(parser, path):
             )
 
 
-parser.add_argument(
+
+
+#### PARSE IO ####
+io_parser = subparsers.add_parser("I/O")
+
+io_parser.add_argument(
     "input_files",
     metavar="PATH",
     nargs="+",
     type=lambda x: validate_file(parser, x),
     help="Paths to PDB files or FASTA files to run AlphaFold2 predictions on.",
 )
+
+io_parser.add_argument(
+    "--overwrite",
+    action="store_true",
+    help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.",
+)
+
+parser.add_argument(
+    "--out_dir",
+    type=str,
+    default="output/",
+    help="Directory to output models and data.",
+)
+
+parser.add_argument(
+    "--reference_pdb",
+    type=str,
+    help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
+)
+
+
+#### PARSE ALPHAFOLD PARAMETERS ####
+af2_parser = subparsers.add_parser("Alphafold parameters")
 
 # could try using a type here (like input files) to assert that the value is greater than 1. Instead right now we assert below.
 parser.add_argument(
@@ -87,7 +101,7 @@ parser.add_argument(
     "--version",
     choices=["monomer", "multimer"],
     default="monomer",
-    help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' version is equivalent to AF2-Multimer and should not be used with the monomer weight types.",
+    help="DEPRECIATED. This option has no effect.",
 )
 
 parser.add_argument(
@@ -122,7 +136,7 @@ parser.add_argument(
     help="Stop recycling early if CA-RMSD difference between current output and previous is < recycle_tol. Default = 0.0 (no early stopping)",
 )
 
-# #An idea in current colab fold.
+# #An idea in current colab fold that I still need to implement
 # parser.add_argument(
 #     "--prediction_threshold",
 #     nargs=2,
@@ -152,16 +166,14 @@ parser.add_argument(
     help="save intermediate structures between recycles. This is useful for making folding movies/trajectories",
 )
 
+
+
 parser.add_argument(
     "--amber_relax",
     action="store_true",
     help="use AMBER to relax the structure after prediction",
 )
-parser.add_argument(
-    "--overwrite",
-    action="store_true",
-    help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.",
-)
+
 parser.add_argument(
     "--initial_guess",
     nargs="?",
@@ -169,11 +181,7 @@ parser.add_argument(
     default=False,
     help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation. If no path is provided, the input_file must be a PDB or silent. If a path is provided, the input must be a fasta.",
 )
-parser.add_argument(
-    "--reference_pdb",
-    type=str,
-    help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
-)
+
 
 parser.add_argument(
     "--simple_rmsd",
@@ -197,14 +205,25 @@ parser.add_argument(
     help="percent of sequence to make during inference. Default = 0.15. Setting to 0 might reduce prediction stocasticity.",
 )
 
-parser.add_argument(
-    "--out_dir",
-    type=str,
-    default="output/",
-    help="Directory to output models and data.",
-)
+
 
 args = parser.parse_args()
+
+
+import os
+
+# This hack is probably unnecessary with AF2-multimer since they've switched to jax for feature processing
+# tell Jax and Tensorflow to use the same memory. This allows us to run larger structures
+os.environ["TF_FORCE_UNIFIED_MEMORY"] = "1"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "2.0"
+
+# let's use a linkfile-like strategy for telling the script where to find stuff like data
+SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
+with open(f"{SCRIPTDIR}/alphafold_weights.pth", "r") as f:
+    ALPHAFOLD_DATADIR = f.read().strip()
+assert os.path.exists(ALPHAFOLD_DATADIR)
+
+
 
 assert args.mock_msa_depth > 0
 
@@ -543,7 +562,7 @@ from alphafold.common import protein
 from alphafold.data import parsers
 
 # I don't know if this is a good idea.
-if args.version == "multimer":
+if args.type == "multimer":
     from alphafold.data import pipeline_multimer
 from alphafold.data import pipeline
 
@@ -591,11 +610,6 @@ if longest < 400 and device != "cpu":
     )
 
 seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
-
-# # initial guess and multimer are not compatible
-# if args.initial_guess and args.version == "multimer":
-#     print("WARNING: initial guess and multimer are not compatible. ")
-#     exit(1)
 
 # TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
 if type(args.initial_guess) == str:  # check input_file type
@@ -846,7 +860,7 @@ else:
 cfg = config.model_config(model_name)
 params = data.get_model_haiku_params(model_name, data_dir=ALPHAFOLD_DATADIR)
 
-if args.version == "multimer":
+if args.type == "multimer":
     cfg.model.num_ensemble_eval = args.num_ensemble
     # cfg.model.embeddings_and_evoformer.num_extra_msa = args.mock_msa_depth
     cfg.model.embeddings_and_evoformer.masked_msa.replace_fraction = args.pct_seq_mask
@@ -905,7 +919,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         feature_dict = {}
         msas = [parsers.Msa([full_sequence], [[0] * len(full_sequence)], [name])]
 
-        if args.version == "multimer":
+        if args.type == "multimer":
 
             feature_dict = pipeline_multimer.DataPipelineFaker().process(
                 query_sequences
@@ -1188,20 +1202,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 )
 
                 # pad input features
-                # Pad sequences to the same length
-                ##sequence padding
-                # I'm not sure if this is compatible with multimer version or not, but I'll stick it here for now
-                # model_config = model_runner.config
-                # eval_cfg = model_config.data.eval
-                # crop_feats = {k: [None] + v for k, v in dict(eval_cfg.feat).items()}
-                # print(crop_feats)
-                # feature_dict = make_fixed_size(
-                #     feature_dict,
-                #     crop_feats,
-                #     args.mock_msa_depth,
-                #     args.mock_msa_depth,
-                #     max_length,
-                # )
                 processed_feature_dict = make_fixed_size(
                     processed_feature_dict, model_runner, max_length
                 )
