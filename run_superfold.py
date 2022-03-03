@@ -57,7 +57,7 @@ parser.add_argument(
     metavar="PATH",
     nargs="+",
     type=lambda x: validate_file(parser, x),
-    help="Paths to PDB files or FASTA files to run AlphaFold2 predictions on.",
+    help="Paths to PDB files or FASTA files to run AlphaFold2 predictions on. All chains in a PDB file will be predicted as a multichain prediction. To specify chainbreaks in FASTA format, separate sequences with '/' or ':'",
 )
 
 # could try using a type here (like input files) to assert that the value is greater than 1. Instead right now we assert below.
@@ -445,6 +445,7 @@ def parse_fasta(path):
             seq = ""
         else:
             seq += line.strip()
+    seq = seq.replace(":","/")
     if len(seq) > 0:
         # This should always be true for a well formatted fasta file
         outputs.append(PredictionTarget(name, seq))
