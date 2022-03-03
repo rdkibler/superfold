@@ -6,8 +6,7 @@ __author__ = "Ryan Kibler, Sergey Ovchinnikov, Nate Bennet, Philip Leung, Adam B
 # krypton is basically lead author without knowing it
 
 import time
-
-time_checkpoint = time.time()
+time_begin = time.time()
 import argparse
 
 # from Bio import SeqIO
@@ -226,6 +225,11 @@ eval_parser.add_argument(
     help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders.",
 )
 
+eval_parser.add_argument(
+    "--no_rosetta_metrics",
+    action="store_true",
+    help="do not compute rosetta metrics. This is useful for speed when you don't need them.",
+)
 
 args = parser.parse_args()
 
@@ -256,6 +260,7 @@ from dataclasses import dataclass
 from typing import Union, Tuple, Dict
 import numpy as np
 from matplotlib import pyplot as plt
+from multiprocessing import Process
 
 plt.switch_backend("agg")
 
@@ -589,6 +594,9 @@ from alphafold.data import pipeline
 
 import colabfold as cf
 from collections import defaultdict
+import tempfile
+import subprocess
+from scipy.spatial import KDTree
 import tqdm
 import jax
 from jax.lib import xla_bridge
@@ -841,11 +849,14 @@ def mk_mock_template(query_sequence):
 
 #######################################################################################################################
 
+import pyrosetta
+pyrosetta.init()
 
 #### load up reference pdb, if present
 if args.reference_pdb is not None:
     reference_pdb_name = "REFERENCE"
     pymol.cmd.load(args.reference_pdb, reference_pdb_name)
+    reference_pose = pyrosetta.pose_from_file(args.reference_pdb)
 
 #### load up initial guess pdb, if present
 if type(args.initial_guess) == str:
@@ -914,6 +925,351 @@ model_runner = model.RunModel(
     return_representations=args.save_intermediates,
 )
 
+processes = []
+time_init = None
+
+def mmalign_chains(target_pose,reference_pose):
+    #get a temporary directory to write things to
+    temp_dir = tempfile.TemporaryDirectory()
+    temp_dir_name = temp_dir.name
+    #write the prediction pdb to the temp directory
+    path_to_intermediate_pdb = os.path.join(temp_dir_name, f"target.pdb")
+    target_pose.dump_pdb(path_to_intermediate_pdb)
+
+    path_to_reference_pdb = os.path.join(temp_dir_name, f"reference.pdb")
+    reference_pose.dump_pdb(path_to_reference_pdb)
+    
+    path_to_aligned_pdb = os.path.join(temp_dir_name, f"aligned.pdb")
+
+    cmd = f"/home/rdkibler/software/alphafold_dev/external_tools/MMalign {path_to_intermediate_pdb} {path_to_reference_pdb} -outfmt 2 -o {path_to_aligned_pdb}"
+    #use subprocess to run the command and save stdout to a string
+    mmalign_stdout = subprocess.check_output(cmd, shell=True)
+    #form is like:
+    ##PDBchain1      PDBchain2       TM1     TM2     RMSD    ID1     ID2     IDali   L1      L2      Lali
+    ##fixed/LHD101_model_4_ptm_seed_0_unrelaxed.pdb:A:B       input/LHD101.pdb:A:B    0.9604  0.9604  0.94    1.000   1.000  1.000                                                                                                          150      150     150
+    ##Total CPU time is  0.08 seconds
+    
+    #parse the output to get the RMSD and TM score (TM1)
+    mmalign_stdout = mmalign_stdout.decode("utf-8")
+    mmalign_stdout = mmalign_stdout.split("\n")
+    mmalign_stdout = mmalign_stdout[1]
+    mmalign_stdout = mmalign_stdout.split(" ")
+    rmsd_to_reference = float(mmalign_stdout[4])
+    tmscore_to_reference = float(mmalign_stdout[2])
+
+    #save to output dictionary
+    metrics = {}
+    metrics["rmsd"] = rmsd_to_reference
+    metrics["tmscore"] = tmscore_to_reference
+
+    #read in the aligned pdb
+    aligned_pose = pyrosetta.pose_from_file(path_to_aligned_pdb)
+    
+    #delete the temp directory
+    temp_dir.cleanup()
+
+    #We have found an alignment, so now we need to find the mapping from the aligned pdb to the reference pdb
+    #let's extract the coordinates of each chain of both the reference and the aligned pdb. 
+
+    #extract the c-alpha coordinates of each chain separately
+    per_chain_CA_coords_of_aligned = defaultdict(list)
+    for residue in aligned_pose.residues:
+        per_chain_CA_coords_of_aligned[residue.chain()].append(residue.xyz("CA"))
+
+    per_chain_CA_coords_of_reference = defaultdict(list)
+    for residue in reference_pose.residues:
+        per_chain_CA_coords_of_reference[residue.chain()].append(residue.xyz("CA"))
+    
+    #now we need to find the mapping from the aligned pdb to the reference pdb
+    #we will use the Hungarian algorithm to find the best mapping
+    #first, we need to convert the coordinates to numpy arrays
+    per_chain_CA_coords_of_aligned = {
+        chain: np.array(coords) for chain, coords in per_chain_CA_coords_of_aligned.items()
+    }
+    per_chain_CA_coords_of_reference = {
+        chain: np.array(coords) for chain, coords in per_chain_CA_coords_of_reference.items()
+    }
+
+
+    #match all unique combinations of chains
+    chain_mapping_reference_to_aligned = {}
+    for ref_chain in sorted(per_chain_CA_coords_of_reference.keys()):
+        distances = {}
+        for aligned_chain in sorted(per_chain_CA_coords_of_aligned.keys()):
+            #get the coordinates of the reference chain
+            ref_coords = per_chain_CA_coords_of_reference[ref_chain]
+            #get the coordinates of the aligned chain
+            aligned_coords = per_chain_CA_coords_of_aligned[aligned_chain]
+            #find the rmsd between the two
+            distance = np.mean((ref_coords - aligned_coords) ** 2)
+            distances[aligned_chain] = distance
+        #the smallest distance for ref_chain is the best mapping
+        chain_mapping_reference_to_aligned[ref_chain] = distances
+    
+    #go through the reference chains in order and determine which of the aligned chains is closest, add that chain to a new pose, then remove that aligned chain 
+    #from the pool to ensure it's not chosen again. This is really only necessary for very poor alignments or for structures that are overlapping badly
+    
+    new_pose = pyrosetta.rosetta.core.pose.Pose()
+    final_reference_to_prediction_chain_mapping = {}
+    for chain_num in range(1, reference_pose.num_chains() + 1):
+        #get the aligned chain with the smallest distance
+        aligned_chain_num = min(chain_mapping_reference_to_aligned[chain_num], key=chain_mapping_reference_to_aligned[chain_num].get)
+        #delete this chain from all the dictionaries
+        for chain_num_sweep in chain_mapping_reference_to_aligned.keys():
+            del chain_mapping_reference_to_aligned[chain_num_sweep][aligned_chain_num]
+
+        extract_chain_start = aligned_pose.chain_begin(aligned_chain_num)
+        extract_chain_end = aligned_pose.chain_end(aligned_chain_num)
+        slice_range = pyrosetta.rosetta.utility.vector1_unsigned_long()
+        for i in range(extract_chain_start, extract_chain_end + 1):
+            slice_range.push_back(i)
+        extracted_chain = pyrosetta.Pose()
+        pyrosetta.rosetta.core.pose.pdbslice(extracted_chain,aligned_pose, slice_range)
+        pyrosetta.rosetta.core.pose.append_pose_to_pose(new_pose, extracted_chain, True)
+        final_reference_to_prediction_chain_mapping[chain_num] = aligned_chain_num
+    
+    metrics["reference_to_target_chain_mapping"] = final_reference_to_prediction_chain_mapping
+    #new pose now has all the right chain order.
+    return new_pose, metrics
+
+def post_processing(intermediate):
+    prediction_result = intermediate["prediction_result"]
+    processed_feature_dict = intermediate["processed_feature_dict"]
+
+
+    # figure note... it would be nice to use prediction_result["structure_module"]["final_atom_mask"] to mask out everything in prediction_result that shouldn't be there due to padding.
+    b_factors = (
+        prediction_result["plddt"][:, None]
+        * prediction_result["structure_module"][
+            "final_atom_mask"
+        ]  # I think not needed b/c I truncated the vector earlier
+    )
+
+    # but for now let's focus on truncating the results we most care about to the length of the target sequence
+    prediction_result["plddt"] = prediction_result["plddt"][: len(target.seq)]
+    if "predicted_aligned_error" in prediction_result:
+        prediction_result["predicted_aligned_error"] = prediction_result[
+            "predicted_aligned_error"
+        ][: len(target.seq), : len(target.seq)]
+
+    dist_bins = jax.numpy.append(0, prediction_result["distogram"]["bin_edges"])
+    dist_mtx = dist_bins[prediction_result["distogram"]["logits"].argmax(-1)]
+    contact_mtx = jax.nn.softmax(prediction_result["distogram"]["logits"])[
+        :, :, dist_bins < 8
+    ].sum(-1)
+
+    out_dict = {}
+    out_dict['recycles'] = prediction_result['recycles']
+    out_dict['tol'] = prediction_result['tol']
+
+    unrelaxed_protein = protein.from_prediction(
+            processed_feature_dict,
+            prediction_result,
+            b_factors=b_factors,
+            remove_leading_feature_dimension=args.type != "multimer",
+        )
+
+    plddt_matrix = prediction_result["plddt"]
+    out_dict['mean_plddt'] = plddt_matrix.mean()
+
+    if "ptm" in prediction_result:
+        out_dict.update(
+            {
+                #"pae": prediction_result["predicted_aligned_error"],
+                "pTMscore": prediction_result["ptm"],
+            }
+            
+        )
+        pae_matrix = prediction_result["predicted_aligned_error"]
+    if args.type == "multimer":
+        out_dict.update(
+            {
+                "pTMscore": prediction_result["ptm"],
+                "iptm": prediction_result["iptm"],
+                #"pae": prediction_result["predicted_aligned_error"],
+            }
+            
+        )
+        pae_matrix = prediction_result["predicted_aligned_error"]
+
+
+    #ACTIVE
+    key = intermediate['key']
+    out_dict["model"] = key.split("_")[1]
+    out_dict["type"] = args.type
+    out_dict["seed"] = key.split("_")[-1]
+
+    output_line = f"{name} {key} recycles:{out_dict['recycles']} tol:{out_dict['tol']:.2f} mean_plddt:{out_dict['mean_plddt']:.2f}"
+    if args.type == "monomer_ptm" or args.type == "multimer":
+        output_line += f" pTMscore:{out_dict['pTMscore']:.2f}"
+
+    #prefix = f"{name}_{key}"
+    prefix = intermediate['prefix']
+    fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
+
+    output_pdbstr = protein.to_pdb(unrelaxed_protein)
+
+    output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
+    output_pdbstr = renumber(output_pdbstr)
+
+    import string
+
+    alphabet = (
+        string.ascii_uppercase + string.digits + string.ascii_lowercase
+    )
+    chain_range_map = get_chain_range_map(output_pdbstr)
+
+    num_chains = len(chain_range_map)
+
+    final_chain_order = list(
+        alphabet[:num_chains]
+    )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
+
+    prediction_pose = pyrosetta.rosetta.core.import_pose.pose_from_pdbstring(unrelaxed_protein)
+
+    #pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
+    if args.reference_pdb is not None:
+        #mmalign chains
+        aligned_pose, metrics = mmalign_chains(prediction_pose, reference_pose)
+        reference_to_target_chaning_mapping = metrics["reference_to_target_chain_mapping"]
+        out_dict['rmsd_to_reference'] = metrics['rmsd']
+        out_dict['mmalign_to_reference'] = metrics['mmalign']
+        output_line += f" rmsd_to_reference:{out_dict['rmsd_to_reference']:0.2f}"
+        output_line += f" mmalign_to_reference:{out_dict['mmalign_to_reference']:0.2f}"
+
+
+    if target.pymol_obj_name is not None:
+        input_pdbstr = pymol.cmd.get_pdbstr(target.pymol_obj_name)
+        input_pose = pyrosetta.rosetta.core.import_pose.pose_from_pdbstring(input_pdbstr)
+        #mmalign chains
+        aligned_pose, metrics = mmalign_chains(prediction_pose, input_pose)
+        reference_to_target_chaning_mapping = metrics["reference_to_target_chain_mapping"]
+        out_dict['rmsd_to_input'] = metrics['rmsd']
+        out_dict['mmalign_to_input'] = metrics['mmalign']
+        output_line += f" rmsd_to_input:{out_dict['rmsd_to_reference']:0.2f}"
+        output_line += f" mmalign_to_input:{out_dict['mmalign_to_reference']:0.2f}"
+        
+
+    
+    final_chain_order_mapping = {
+        old_chain: new_chain
+        for old_chain, new_chain in zip(alphabet, final_chain_order)
+    }
+
+    import itertools
+
+    #get per-chain plddt
+    #TODO
+
+    if args.type == "monomer_ptm":
+        # calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
+        
+
+        # first, truncate the matrix to the full length of the sequence (without chainbreak characters "/"). It can sometimes be too long because of padding inputs
+        sequence_length = len(target.seq.replace("/", "").replace("U", ""))
+        pae_matrix = pae_matrix[:sequence_length, :sequence_length]
+
+        if args.output_pae:
+            out_dict["pae"] = pae_matrix
+
+        interaction_paes = []
+        for chain_1, chain_2 in itertools.permutations(
+            final_chain_order, 2
+        ):
+            chain_1_range_start, chain_1_range_stop = chain_range_map[
+                chain_1
+            ]
+            chain_2_range_start, chain_2_range_stop = chain_range_map[
+                chain_2
+            ]
+
+            final_chain_1 = final_chain_order_mapping[chain_1]
+            final_chain_2 = final_chain_order_mapping[chain_2]
+            interaction_pae = np.mean(
+                pae_matrix[
+                    chain_1_range_start:chain_1_range_stop,
+                    chain_2_range_start:chain_2_range_stop,
+                ]
+            )
+            interaction_paes.append(interaction_pae)
+            out_dict[
+                f"mean_pae_interaction_{final_chain_1}{final_chain_2}"
+            ] = interaction_pae
+
+        # average all the interaction PAEs
+        out_dict["mean_pae_interaction"] = np.mean(interaction_paes)
+
+        # calculate mean intra-chain PAE per chain
+        intra_chain_paes = []
+        for chain in alphabet[:num_chains]:
+            chain_range_start, chain_range_stop = chain_range_map[chain]
+            intra_chain_pae = np.mean(
+                pae_matrix[
+                    chain_range_start:chain_range_stop,
+                    chain_range_start:chain_range_stop,
+                ]
+            )
+            intra_chain_paes.append(intra_chain_pae)
+            out_dict[f"mean_pae_intra_chain_{chain}"] = intra_chain_pae
+
+        # average all the intrachain PAEs
+        out_dict["mean_pae_intra_chain"] = np.mean(intra_chain_paes)
+
+        # average all the PAEs
+        out_dict["mean_pae"] = np.mean(pae_matrix)
+
+
+    if args.show_images:
+        fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
+        plt.savefig(
+            os.path.join(args.out_dir, f"{prefix}.png"),
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+
+    if args.amber_relax:
+        # Relax the prediction.
+        relaxed_pdb_str, _, _ = amber_relaxer.process(
+            prot=unrelaxed_protein
+        )
+
+        # Save the relaxed PDB.
+        relaxed_output_path = os.path.join(
+            args.out_dir, f"{prefix}_relaxed.pdb"
+        )
+        with open(relaxed_output_path, "w") as f:
+            f.write(relaxed_pdb_str)
+
+
+    # cast devicearray to serializable type
+    for key in out_dict:
+        out_dict[key] = np.array(out_dict[key]).tolist()
+
+    import json
+
+    # output as nicely formatted json
+    global time_checkpoint
+    elapsed_time = time.time() - time_checkpoint
+    output_line += f" elapsed time (s): {elapsed_time}"
+
+    if args.output_summary:
+        with open(os.path.join(args.out_dir, "reports.txt"), "a") as f:
+            f.write(output_line + "\n")
+    print(output_line)
+
+    out_dict["elapsed_time"] = elapsed_time
+
+    with open(
+        os.path.join(args.out_dir, f"{prefix}_prediction_results.json"),
+        "w",
+    ) as f:
+        json.dump(out_dict, f, indent=2)
+
+    time_checkpoint = time.time()
+
+
+########################################################################################################################
+
 with tqdm.tqdm(total=len(query_targets)) as pbar1:
     for target in query_targets:
         pbar1.set_description(f"Input: {target.name}")
@@ -964,252 +1320,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         ###########################
         # run alphafold
         ###########################
-        def parse_results(prediction_result, processed_feature_dict):
-
-            # figure note... it would be nice to use prediction_result["structure_module"]["final_atom_mask"] to mask out everything in prediction_result that shouldn't be there due to padding.
-            b_factors = (
-                prediction_result["plddt"][:, None]
-                * prediction_result["structure_module"][
-                    "final_atom_mask"
-                ]  # I think not needed b/c I truncated the vector earlier
-            )
-
-            # but for now let's focus on truncating the results we most care about to the length of the target sequence
-            prediction_result["plddt"] = prediction_result["plddt"][: len(target.seq)]
-            if "predicted_aligned_error" in prediction_result:
-                prediction_result["predicted_aligned_error"] = prediction_result[
-                    "predicted_aligned_error"
-                ][: len(target.seq), : len(target.seq)]
-
-            dist_bins = jax.numpy.append(0, prediction_result["distogram"]["bin_edges"])
-            dist_mtx = dist_bins[prediction_result["distogram"]["logits"].argmax(-1)]
-            contact_mtx = jax.nn.softmax(prediction_result["distogram"]["logits"])[
-                :, :, dist_bins < 8
-            ].sum(-1)
-
-            out = {
-                "unrelaxed_protein": protein.from_prediction(
-                    processed_feature_dict,
-                    prediction_result,
-                    b_factors=b_factors,
-                    remove_leading_feature_dimension=args.type != "multimer",
-                ),
-                "plddt": prediction_result["plddt"],
-                "mean_plddt": prediction_result["plddt"].mean(),
-                "dists": dist_mtx,
-                "adj": contact_mtx,
-            }
-
-            if "ptm" in prediction_result:
-                out.update(
-                    {
-                        "pae": prediction_result["predicted_aligned_error"],
-                        "pTMscore": prediction_result["ptm"],
-                    }
-                )
-            if args.type == "multimer":
-                out.update(
-                    {
-                        "pTMscore": prediction_result["ptm"],
-                        "pae": prediction_result["predicted_aligned_error"],
-                        "iptm": prediction_result["iptm"],
-                    }
-                )
-            return out
 
         total = len(model_names) * len(seed_range)
 
         with tqdm.tqdm(total=total) as pbar2:
-            outs = {}
-
-            def report(key):
-                pbar2.update(n=1)
-                o = outs[key]
-                out_dict = {}
-                out_dict["mean_plddt"] = o["mean_plddt"]
-
-                out_dict["recycles"] = o["recycles"]
-                out_dict["tol"] = o["tol"]
-                out_dict["model"] = key.split("_")[1]
-                out_dict["type"] = args.type
-                out_dict["seed"] = key.split("_")[-1]
-
-                output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
-                if args.type == "monomer_ptm" or args.type == "multimer":
-                    output_line += f" pTMscore:{o['pTMscore']:.2f}"
-
-                prefix = f"{name}_{key}"
-                fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
-
-                output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
-
-                output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
-                output_pdbstr = renumber(output_pdbstr)
-
-                import string
-
-                alphabet = (
-                    string.ascii_uppercase + string.digits + string.ascii_lowercase
-                )
-                chain_range_map = get_chain_range_map(output_pdbstr)
-
-                num_chains = len(chain_range_map)
-
-                final_chain_order = list(
-                    alphabet[:num_chains]
-                )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
-
-                pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                if args.reference_pdb is not None:
-                    if args.simple_rmsd:
-                        rmsd = pymol_align("temp_target", reference_pdb_name, "super")
-                    else:
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", reference_pdb_name, "super"
-                        )  # use super here b/c sequence is not guaranteed to be very similar
-
-                    out_dict["rmsd_to_reference"] = rmsd
-                    pymol.cmd.delete("temp_target")
-                    output_line += f" rmsd_to_reference:{rmsd:0.2f}"
-
-                if target.pymol_obj_name is not None:
-                    if args.simple_rmsd:
-                        rmsd = pymol_align("temp_target", target.pymol_obj_name)
-                    else:
-
-                        # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
-                        pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", target.pymol_obj_name
-                        )
-
-                    out_dict["rmsd_to_input"] = rmsd
-                    pymol.cmd.delete("temp_target")
-                    output_line += f" rmsd_to_input:{rmsd:0.2f}"
-
-                with open(fout_name, "w") as f:
-                    f.write(output_pdbstr)
-
-                final_chain_order_mapping = {
-                    old_chain: new_chain
-                    for old_chain, new_chain in zip(alphabet, final_chain_order)
-                }
-
-                import itertools
-
-                if args.type == "monomer_ptm":
-                    # calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
-                    pae = o["pae"]
-
-                    # first, truncate the matrix to the full length of the sequence (without chainbreak characters "/"). It can sometimes be too long because of padding inputs
-                    sequence_length = len(target.seq.replace("/", "").replace("U", ""))
-                    pae = pae[:sequence_length, :sequence_length]
-
-                    if args.output_pae:
-                        out_dict["pae"] = pae
-
-                    interaction_paes = []
-                    for chain_1, chain_2 in itertools.permutations(
-                        final_chain_order, 2
-                    ):
-                        chain_1_range_start, chain_1_range_stop = chain_range_map[
-                            chain_1
-                        ]
-                        chain_2_range_start, chain_2_range_stop = chain_range_map[
-                            chain_2
-                        ]
-
-                        final_chain_1 = final_chain_order_mapping[chain_1]
-                        final_chain_2 = final_chain_order_mapping[chain_2]
-                        interaction_pae = np.mean(
-                            pae[
-                                chain_1_range_start:chain_1_range_stop,
-                                chain_2_range_start:chain_2_range_stop,
-                            ]
-                        )
-                        interaction_paes.append(interaction_pae)
-                        out_dict[
-                            f"mean_pae_interaction_{final_chain_1}{final_chain_2}"
-                        ] = interaction_pae
-
-                    # average all the interaction PAEs
-                    out_dict["mean_pae_interaction"] = np.mean(interaction_paes)
-
-                    # calculate mean intra-chain PAE per chain
-                    intra_chain_paes = []
-                    for chain in alphabet[:num_chains]:
-                        chain_range_start, chain_range_stop = chain_range_map[chain]
-                        intra_chain_pae = np.mean(
-                            pae[
-                                chain_range_start:chain_range_stop,
-                                chain_range_start:chain_range_stop,
-                            ]
-                        )
-                        intra_chain_paes.append(intra_chain_pae)
-                        out_dict[f"mean_pae_intra_chain_{chain}"] = intra_chain_pae
-
-                    # average all the intrachain PAEs
-                    out_dict["mean_pae_intra_chain"] = np.mean(intra_chain_paes)
-
-                    # average all the PAEs
-                    out_dict["mean_pae"] = np.mean(pae)
-
-                    out_dict["pTMscore"] = o["pTMscore"]
-                elif args.type == "multimer":
-                    out_dict["ptm"] = o["pTMscore"]
-                    out_dict["iptm"] = o["iptm"]
-
-                if args.show_images:
-                    fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
-                    plt.savefig(
-                        os.path.join(args.out_dir, f"{prefix}.png"),
-                        bbox_inches="tight",
-                    )
-                    plt.close(fig)
-
-                if args.amber_relax:
-                    # Relax the prediction.
-                    relaxed_pdb_str, _, _ = amber_relaxer.process(
-                        prot=o["unrelaxed_protein"]
-                    )
-
-                    # Save the relaxed PDB.
-                    relaxed_output_path = os.path.join(
-                        args.out_dir, f"{prefix}_relaxed.pdb"
-                    )
-                    with open(relaxed_output_path, "w") as f:
-                        f.write(relaxed_pdb_str)
-
-                # np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
-
-                # cast devicearray to serializable type
-                for key in out_dict:
-                    out_dict[key] = np.array(out_dict[key]).tolist()
-
-                import json
-
-                # output as nicely formatted json
-                global time_checkpoint
-                elapsed_time = time.time() - time_checkpoint
-                output_line += f" elapsed time (s): {elapsed_time}"
-
-                if args.output_summary:
-                    with open(os.path.join(args.out_dir, "reports.txt"), "a") as f:
-                        f.write(output_line + "\n")
-                print(output_line)
-
-                out_dict["elapsed_time"] = elapsed_time
-
-                with open(
-                    os.path.join(args.out_dir, f"{prefix}_prediction_results.json"),
-                    "w",
-                ) as f:
-                    json.dump(out_dict, f, indent=2)
-
-                time_checkpoint = time.time()
-
-            #######################################################################
-
             # go through each random_seed
             for seed in seed_range:
 
@@ -1248,6 +1362,14 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     )
                     for k in model_runner.params.keys():
                         model_runner.params[k] = params[k]
+                    
+
+                    if time_init == None:
+                        time_init = time.time()
+                        time_to_initialize = time_init - time_begin
+
+                    intermediate = {}
+                    intermediate['time_start'] = time.time()
 
                     # predict
                     if args.initial_guess:
@@ -1269,12 +1391,37 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                             device,
                         )  # is this ok?
 
-                    # save results
-                    outs[key] = parse_results(prediction_result, processed_feature_dict)
-                    outs[key].update({"recycles": r, "tol": t})
-                    report(key)
+                    intermediate['time_end_prediction'] = time.time()
+                    intermediate['prediction_result'] = prediction_result
+                    intermediate['processed_feature_dict'] = processed_feature_dict
+                    intermediate['recycles'] = r
+                    intermediate['tol'] = t
+                    intermediate['model'] = model_name
+                    intermediate['seed'] = seed
+                    intermediate['prefix'] = prefix
+                    intermediate['key'] = key
+                    #outs[key] = parse_results(prediction_result, processed_feature_dict)
+                    #outs[key].update({"recycles": r, "tol": t})
+                    #report(key)
+                    p = Process(target=post_processing, args=(intermediate,))
+                    p.start()
 
                     del prediction_result, params
                 del processed_feature_dict
 
         pbar1.update(1)
+
+
+# finish up
+pbar1.close()
+pbar2.close()
+
+any_alive = False
+for p in processes:
+    if p.is_alive():
+        any_alive = True
+        break
+if any_alive:
+    print("waiting for post-processing processes to finish")
+    for p in processes:
+        p.join()
