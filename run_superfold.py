@@ -5,6 +5,7 @@ __author__ = "Ryan Kibler, Sergey Ovchinnikov, Nate Bennet, Philip Leung, Adam B
 # it contains alphafold2-multimer but don't use it
 # krypton is basically lead author without knowing it
 
+from asyncio import format_helpers
 import time
 
 time_checkpoint = time.time()
@@ -205,6 +206,9 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+
+#adding this to keep code working later on while I figure out how to make it work
+args.save_intermediates = False
 
 assert args.mock_msa_depth > 0
 
