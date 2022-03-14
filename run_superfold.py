@@ -145,12 +145,12 @@ parser.add_argument(
     help="write a 1-line summary of each prediction to disk under output_dir named 'reports.txt'.",
 )
 
-# unknown if this currently works
-parser.add_argument(
-    "--save_intermediates",
-    action="store_true",
-    help="save intermediate structures between recycles. This is useful for making folding movies/trajectories",
-)
+# # unknown if this currently works
+# parser.add_argument(
+#     "--save_intermediates",
+#     action="store_true",
+#     help="save intermediate structures between recycles. This is useful for making folding movies/trajectories",
+# )
 
 parser.add_argument(
     "--amber_relax",
