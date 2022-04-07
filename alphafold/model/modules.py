@@ -298,7 +298,6 @@ class AlphaFold(hk.Module):
         compute_loss=False,
         ensemble_representations=False,
         return_representations=False,
-        initial_guess=None,
     ):
         """Run the AlphaFold model.
 
@@ -358,10 +357,8 @@ class AlphaFold(hk.Module):
 
         #if no recycles are requested, keep the upstream work (hack from krypton)
         emb_config = self.config.embeddings_and_evoformer
-        # Nate insertion
         prev_pos = jnp.zeros([num_residues, residue_constants.atom_type_num, 3])
-        if emb_config.initial_guess:
-                prev_pos += initial_guess
+
     
         # we can implement per-recycle checkpointing by dumping and loading this dict! #TODO
         prev = {
