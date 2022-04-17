@@ -1,11 +1,9 @@
-__author__ = "Ryan Kibler, Sergey Ovchinnikov, Nate Bennet, Philip Leung, Adam Broerman"  # TODO others?
+__author__ = "Ryan Kibler, Sergey Ovchinnikov, Nate Bennet, Philip Leung, Adam Broerman"
 # most of the code is copied from krypton's colabfold https://colab.research.google.com/drive/1teIx4yDyrSm0meWvM9X9yYNLHGO7f_Zy#scrollTo=vJxiCSLc7IWD
-# The initial guess stuff is from Nate Bennett with maybe some helper code from Adam Broerman
 # pae code is lifted from Nate
 # it contains alphafold2-multimer but don't use it
 # krypton is basically lead author without knowing it
 
-from asyncio import format_helpers
 import time
 
 time_checkpoint = time.time()
@@ -163,13 +161,7 @@ parser.add_argument(
     action="store_true",
     help="overwrite existing files. Default is to skip predictions which would result in files that already exist. This is useful for checkpointing and makes the script more backfill friendly.",
 )
-parser.add_argument(
-    "--initial_guess",
-    nargs="?",
-    const=True,
-    default=False,
-    help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation. If no path is provided, the input_file must be a PDB or silent. If a path is provided, the input must be a fasta.",
-)
+
 parser.add_argument(
     "--reference_pdb",
     type=str,
@@ -179,7 +171,7 @@ parser.add_argument(
 parser.add_argument(
     "--simple_rmsd",
     action="store_true",
-    help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders.",
+    help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders. USE THIS FLAG IF YOU HAVE DIFFERENT CHAINS IN YOUR INPUT PDB FILE. RMSD calculations are unreliable otherwise",
 )
 
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
@@ -597,46 +589,12 @@ if longest < 400 and device != "cpu":
 
 seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 
-# # initial guess and multimer are not compatible
-# if args.initial_guess and args.version == "multimer":
-#     print("WARNING: initial guess and multimer are not compatible. ")
-#     exit(1)
-
-# TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
-if type(args.initial_guess) == str:  # check input_file type
-    if ".pdb" in args.input_files[0]:
-        print("WARNING: initial guess was provided a PDB and input_file was a PDB")
-        print(
-            "No followup argument is needed for initial guess when input_file is a PDB"
-        )
-        exit(1)
-    elif ".silent" in args.input_files[0]:
-        print("WARNING: initial guess was provided a PDB and input_file was a .silent")
-        print(
-            "No followup argument is needed for initial guess when input_file is a silent"
-        )
-        exit(1)
-    else:
-        pass
-else:
-    pass
-if ".fa" in args.input_files[0]:
-    if args.initial_guess is True:
-        print("WARNING: initial guess needs a PDB if input_file was a fasta")
-        exit(1)
-    else:
-        pass
-else:
-    pass
-
-
 # blatently stolen from https://github.com/sokrypton/ColabFold/blob/8e6b6bb582f40a4fea06b19fc001d3d9ca208197/colabfold/alphafold/msa.py#L15
 # by konstin i think
 # no worries, I plan on going and actually forking colabfold eventually.
 from alphafold.model.features import FeatureDict
 from alphafold.model.tf import shape_placeholders
 import tensorflow as tf
-from typing import Mapping, Any
 
 NUM_RES = shape_placeholders.NUM_RES
 NUM_MSA_SEQ = shape_placeholders.NUM_MSA_SEQ
@@ -687,155 +645,15 @@ def make_fixed_size(feat, runner, max_length):
     return {k: np.asarray(v) for k, v in feat.items()}
 
 
-#######################################################################################################################
-# Adapted from code by Nate Bennett for providing initial guess for the alphafold model
-import jax.numpy as jnp
-from alphafold.common import residue_constants
-from alphafold.data import templates
-import collections
-
-
-def af2_get_atom_positions(pymol_object_name) -> Tuple[np.ndarray, np.ndarray]:
-    """Gets atom positions and mask."""
-
-    lines = pymol.cmd.get_pdbstr(pymol_object_name).splitlines()
-
-    # indices of residues observed in the structure
-    idx_s = [
-        int(l[22:26]) for l in lines if l[:4] == "ATOM" and l[12:16].strip() == "CA"
-    ]
-    num_res = len(idx_s)
-
-    all_positions = np.zeros([num_res, residue_constants.atom_type_num, 3])
-    all_positions_mask = np.zeros(
-        [num_res, residue_constants.atom_type_num], dtype=np.int64
-    )
-
-    residues = collections.defaultdict(list)
-    # 4 BB + up to 10 SC atoms
-    xyz = np.full((len(idx_s), 14, 3), np.nan, dtype=np.float32)
-    for l in lines:
-        if l[:4] != "ATOM":
-            continue
-        resNo, atom, aa = int(l[22:26]), l[12:16], l[17:20]
-
-        residues[resNo].append(
-            (atom.strip(), aa, [float(l[30:38]), float(l[38:46]), float(l[46:54])])
-        )
-
-    for resNo in residues:
-        pos = np.zeros([residue_constants.atom_type_num, 3], dtype=np.float32)
-        mask = np.zeros([residue_constants.atom_type_num], dtype=np.float32)
-
-        for atom in residues[resNo]:
-            atom_name = atom[0]
-            x, y, z = atom[2]
-            if atom_name in residue_constants.atom_order.keys():
-                pos[residue_constants.atom_order[atom_name]] = [x, y, z]
-                mask[residue_constants.atom_order[atom_name]] = 1.0
-            elif atom_name.upper() == "SE" and res.get_resname() == "MSE":
-                # Put the coordinates of the selenium atom in the sulphur column.
-                pos[residue_constants.atom_order["SD"]] = [x, y, z]
-                mask[residue_constants.atom_order["SD"]] = 1.0
-
-        idx = idx_s.index(resNo)  # This is the order they show up in the pdb
-        all_positions[idx] = pos
-        all_positions_mask[idx] = mask
-    # _check_residue_distances(
-    #     all_positions, all_positions_mask, max_ca_ca_distance) # AF2 checks this but if we want to allow massive truncations we don't want to check this
-
-    return all_positions, all_positions_mask
-
-
-def af2_all_atom_pymol_object_name(pymol_object_name):
-    template_seq = "".join(
-        [
-            line
-            for line in pymol.cmd.get_fastastr(pymol_object_name).split()
-            if not line.startswith(">")
-        ]
-    )
-
-    all_atom_positions, all_atom_mask = af2_get_atom_positions(pymol_object_name)
-
-    all_atom_positions = np.split(all_atom_positions, all_atom_positions.shape[0])
-
-    templates_all_atom_positions = []
-
-    # Initially fill will all zero values
-    for _ in template_seq:
-        templates_all_atom_positions.append(
-            jnp.zeros((residue_constants.atom_type_num, 3))
-        )
-
-    for idx, i in enumerate(template_seq):
-        templates_all_atom_positions[idx] = all_atom_positions[idx][
-            0
-        ]  # assign target indices to template coordinates
-
-    return jnp.array(templates_all_atom_positions)
-
-
-def mk_mock_template(query_sequence):
-    # mock template features
-    output_templates_sequence = []
-    output_confidence_scores = []
-    templates_all_atom_positions = []
-    templates_all_atom_masks = []
-
-    for _ in query_sequence:
-        templates_all_atom_positions.append(
-            np.zeros((templates.residue_constants.atom_type_num, 3))
-        )
-        templates_all_atom_masks.append(
-            np.zeros(templates.residue_constants.atom_type_num)
-        )
-        output_templates_sequence.append("-")
-        output_confidence_scores.append(-1)
-    output_templates_sequence = "".join(output_templates_sequence)
-    templates_aatype = templates.residue_constants.sequence_to_onehot(
-        output_templates_sequence, templates.residue_constants.HHBLITS_AA_TO_ID
-    )
-
-    template_features = {
-        "template_all_atom_positions": np.array(templates_all_atom_positions)[None],
-        "template_all_atom_masks": np.array(templates_all_atom_masks)[None],
-        "template_sequence": [f"none".encode()],
-        "template_aatype": np.array(templates_aatype)[None],
-        "template_confidence_scores": np.array(output_confidence_scores)[None],
-        "template_domain_names": [f"none".encode()],
-        "template_release_date": [f"none".encode()],
-    }
-
-    return template_features
-
-
-#######################################################################################################################
-
 
 #### load up reference pdb, if present
 if args.reference_pdb is not None:
     reference_pdb_name = "REFERENCE"
     pymol.cmd.load(args.reference_pdb, reference_pdb_name)
 
-#### load up initial guess pdb, if present
-if type(args.initial_guess) == str:
-    initial_guess_name = "INITIAL_GUESS"
-    pymol.cmd.load(args.initial_guess, initial_guess_name)
-
-    # check that all the provided fasta sequences are the same length
-    initial_guess_length = pymol.cmd.count_atoms(initial_guess_name + " and name CA")
-    for tgt in query_targets:
-        if len(tgt) != initial_guess_length:
-            raise ValueError(
-                f"All provided fasta sequences must be the same length as the initial guess structure in order to use initial guess with fasta inputs. Initial guess length: {initial_guess_length}, {tgt.name} length: {len(tgt)}"
-            )
-
-
 ######################################
 
 max_length = max([len(tgt) for tgt in query_targets])
-
 
 if args.type == "multimer":
     model_name = "model_5_multimer"
@@ -859,19 +677,12 @@ if args.version == "multimer":
     # templates are enabled by default, but I'm not supplying them, so disable
     cfg.model.embeddings_and_evoformer.template.enabled = False
 
-    cfg.model.embeddings_and_evoformer.initial_guess = bool(
-        args.initial_guess
-    )  # new for initial guessing
-
 else:
     cfg.data.eval.num_ensemble = args.num_ensemble
     cfg.data.eval.max_msa_clusters = args.mock_msa_depth
     cfg.data.common.max_extra_msa = args.mock_msa_depth
     cfg.data.eval.masked_msa_replace_fraction = args.pct_seq_mask
     cfg.data.common.num_recycle = args.max_recycles
-    cfg.model.embeddings_and_evoformer.initial_guess = bool(
-        args.initial_guess
-    )  # new for initial guessing
     # do I also need to turn on template?
 
 cfg.model.recycle_tol = args.recycle_tol
@@ -898,14 +709,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         # define input features
         #############################
 
-        # I anticipate a bug where the initial guess is not long enough
-        if not args.initial_guess:  # initial guess is False by default
-            initial_guess = None
-        elif type(args.initial_guess) == str:  # use the provided pdb
-            initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
-        else:  # use the target structure
-            initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
-
         num_res = len(full_sequence)
         feature_dict = {}
         msas = [parsers.Msa([full_sequence], [[0] * len(full_sequence)], [name])]
@@ -928,9 +731,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             feature_dict["residue_index"] = cf.chain_break(
                 feature_dict["residue_index"], Ls
             )
-
-            if args.initial_guess:
-                feature_dict.update(mk_mock_template(query_sequences))
 
         ###########################
         # run alphafold
@@ -1238,24 +1038,12 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                         model_runner.params[k] = params[k]
 
                     # predict
-                    if args.initial_guess:
-                        prediction_result, (r, t) = cf.to(
-                            model_runner.predict(
-                                processed_feature_dict,
-                                random_seed=seed,
-                                initial_guess=initial_guess,
-                            ),
-                            device,
-                        )  # is this ok?
-                    else:
-                        # a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?).
-                        # the fix will be to update Multimer code to accept initial_guess deep down in the actual code
-                        prediction_result, (r, t) = cf.to(
-                            model_runner.predict(
-                                processed_feature_dict, random_seed=seed
-                            ),
-                            device,
-                        )  # is this ok?
+                    prediction_result, (r, t) = cf.to(
+                        model_runner.predict(
+                            processed_feature_dict, random_seed=seed
+                        ),
+                        device,
+                    )  # is this ok?
 
                     # save results
                     outs[key] = parse_results(prediction_result, processed_feature_dict)
