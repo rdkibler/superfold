@@ -205,6 +205,12 @@ parser.add_argument(
     help="Directory to output models and data.",
 )
 
+parser.add_argument(
+    "--quiet",
+    action="store_true",
+    help="Do not print progress to stdout. Useful for running on a cluster.",
+)
+
 args = parser.parse_args()
 
 #adding this to keep code working later on while I figure out how to make it work
@@ -222,6 +228,19 @@ from dataclasses import dataclass
 from typing import Union, Tuple, Dict
 import numpy as np
 from matplotlib import pyplot as plt
+import logging
+
+logger = logging.getLogger("Superfold")
+if args.quiet:
+    
+    logger.setLevel(logging.ERROR)
+    PBAR = False
+else:
+    logger.setLevel(logging.INFO)
+    PBAR = True
+
+import subprocess
+import json
 
 plt.switch_backend("agg")
 
@@ -278,8 +297,6 @@ def pymol_apply_new_chains(pymol_object_name: str, new_chains: list) -> None:
         chain_name = f"{pymol_object_name}_chain_{i}"
         pymol.cmd.select(chain_name, f"{pymol_object_name} and chain {chain}")
         chain_selections.append(chain_name)
-
-    # print(pymol.cmd.get_names('all', 0))
 
     # now, apply the new chains
     for chain_selection, new_chain in zip(chain_selections, new_chains):
@@ -374,9 +391,6 @@ def pymol_multichain_align(
             f"{reference_pymol_name} and n. CA",
             cycles=0,
         )[0]
-
-        # debug: useful to see if alignment is working
-        # print(f'{rmsd} {new_order}')
 
         if rmsd < best_rmsd:
             best_order = new_order
@@ -558,8 +572,98 @@ import tqdm
 import jax
 from jax.lib import xla_bridge
 
+def get_cluster_info()->str:
+    try:
+        bash_command = "sacctmgr list cluster"
+        process = subprocess.Popen(bash_command.split(), stdout=subprocess.PIPE)
+        output, error = process.communicate()
+        clustername = output.decode("utf-8").split("\n")[2][:10].strip()
+
+        return clustername
+    except OSError:
+        return "Unknown"
+
+
+def get_cpu_info()->dict:
+    cpu_info = {}
+
+    #number of processors available
+    try:
+        bash_command = "nproc"
+        process = subprocess.Popen(bash_command.split(), stdout=subprocess.PIPE)
+        num_processes, error = process.communicate()
+        cpu_info['num_processors'] = num_processes.decode("utf-8").strip()
+    except OSError:
+        logger.info("Could not get number of processors")
+        cpu_info['num_processors'] = "UNK"
+
+    #information about the cpu (e.g. model name, speed, etc)
+    try:
+        bash_command = "lscpu -J"
+        output,error = subprocess.Popen(bash_command.split(), stdout=subprocess.PIPE).communicate()
+        cpu_info_full = json.loads(output)
+
+        #it comes out in a crazy format
+        cpu_info_processed = {}
+        for line in cpu_info_full['lscpu']:
+            cpu_info_processed[line['field']] = line['data']
+    
+        cpu_info['model name'] = cpu_info_processed['Model name:']
+    except OSError:
+        logger.info("Could not get the model name of the cpu")
+        cpu_info['model name'] = "UNK"
+    return cpu_info
+
+
+#modified from
+#https://www.programcreek.com/python/?code=Breakend%2Fexperiment-impact-tracker%2Fexperiment-impact-tracker-master%2Fexperiment_impact_tracker%2Fgpu%2Fnvidia.py
+def get_gpu_info()->list:
+    gpu_info = []
+    try:
+        bash_command = "nvidia-smi --query-gpu=index,name,uuid,memory.total,memory.free,memory.used,count,utilization.gpu,utilization.memory --format=csv"
+        process = subprocess.Popen(bash_command.split(), stdout=subprocess.PIPE)
+        output, error = process.communicate()
+
+        lines = output.decode("utf-8").split("\n")
+        """"
+        example:
+        index, name, uuid, memory.total [MiB], memory.free [MiB], memory.used [MiB], count, utilization.gpu [%], utilization.memory [%]
+        0, NVIDIA A100-SXM4-40GB, GPU-40fae9fb-c8a5-4b7e-f586-96186023bbab, 40536 MiB, 40536 MiB, 0 MiB, 4, 0 %, 0 %
+        1, NVIDIA A100-SXM4-40GB, GPU-b613f653-016c-1ae5-8a08-ec2ac1621ac9, 40536 MiB, 40536 MiB, 0 MiB, 4, 0 %, 0 %
+        2, NVIDIA A100-SXM4-40GB, GPU-0baeac98-c289-a146-e927-1abe1e619182, 40536 MiB, 40536 MiB, 0 MiB, 4, 0 %, 0 %
+        3, NVIDIA A100-SXM4-40GB, GPU-a0ebca01-81ee-fadc-5cfb-54278daedde9, 40536 MiB, 40536 MiB, 0 MiB, 4, 0 %, 0 %
+        """
+
+        lines.pop(0) #remove the header
+        for l in lines:
+            tokens = l.split(", ")
+            if len(tokens) > 6:
+                gpu_info.append({'id': tokens[0], 'name': tokens[1], 'mem': tokens[3], 'cores': tokens[6], 'mem_free': tokens[4], 'mem_used': tokens[5],
+                                 'util_gpu': tokens[7], 'util_mem': tokens[8]})
+    except OSError:
+        logger.info("GPU device is not available")
+
+    return gpu_info 
+
 device = xla_bridge.get_backend().platform
-print("using ", device)
+
+#record name of node
+import socket
+hostname = socket.gethostname()
+clustername = get_cluster_info()
+logger.info(f"Using device {device} on node {hostname} ({clustername})")
+logger.info("CPU info:")
+cpu_info = get_cpu_info()
+logger.info(f"CPU_model: {cpu_info['model name']}")
+logger.info(f"num_processors: {cpu_info['num_processors']}")
+logger.info("GPU info:")
+if device == "gpu":
+    for gpu in get_gpu_info():
+        logger.info(f"gpu {gpu['id']}: {gpu['name']}")
+elif device == "cpu":
+    pass
+else:
+    logger.info(f"Additional information on {device} unavailable")
 
 
 if args.amber_relax:
@@ -585,50 +689,35 @@ longest = max([len(tgt) for tgt in query_targets])
 if longest < 400 and device != "cpu":
     # catch the user's eye
     plural = "s are" if len(query_targets) > 1 else " is"
-    print(
-        "=======================================================================================\n"
-        + f"WARNING: Your query{plural} shorter than 400 residues. This is a very small protein.\n"
-        + "You may want to use the CPU to conserve GPU resources for those who need them.\n"
-        + "Remember that you can launch far more jobs in parallel on CPUs than you can on GPUs...\n"
-        + "See this example of how prediction time scales on CPU vs GPU: \n"
-        + "https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY\n"
-        + "======================================================================================="
-    )
+    logger.warning(f" =======================================================================================")
+    logger.warning(f" Your query{plural} shorter than 400 residues. This is a very small protein. You should ")
+    logger.warning(f" use the CPU to conserve GPU resources for those who need them. Remember that you can")
+    logger.warning(f" launch far more jobs in parallel on CPUs than you can on GPUs. See this example of how")
+    logger.warning(f" prediction time scales on CPU vs GPU:") 
+    logger.warning(f" https://docs.google.com/spreadsheets/d/1jTGITpIx6fJehAplUkXtePOp7me3Dpq_pPKHn68F7XY")
+    logger.warning(f" =======================================================================================")
 
 seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 
-# # initial guess and multimer are not compatible
-# if args.initial_guess and args.version == "multimer":
-#     print("WARNING: initial guess and multimer are not compatible. ")
-#     exit(1)
-
-# TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
-if type(args.initial_guess) == str:  # check input_file type
-    if ".pdb" in args.input_files[0]:
-        print("WARNING: initial guess was provided a PDB and input_file was a PDB")
-        print(
-            "No followup argument is needed for initial guess when input_file is a PDB"
-        )
-        exit(1)
-    elif ".silent" in args.input_files[0]:
-        print("WARNING: initial guess was provided a PDB and input_file was a .silent")
-        print(
-            "No followup argument is needed for initial guess when input_file is a silent"
-        )
-        exit(1)
+# check if there is a structure for initial guess to use 
+if args.initial_guess:
+    file_provided = os.path.exists(args.initial_guess)
+    if not file_provided:
+        for file in args.input_files:
+            ext = os.path.splitext(file)[1]
+            if ext in ["fasta","fa"]:
+                logger.warning(f"Initial guess requires some structure input. Either supply --initial_guess with a pdb file")
+                logger.warning(f"or use an input file format that contains a structure. (e.g. not fasta). exiting.")
+                exit(1) 
     else:
-        pass
-else:
-    pass
-if ".fa" in args.input_files[0]:
-    if args.initial_guess is True:
-        print("WARNING: initial guess needs a PDB if input_file was a fasta")
-        exit(1)
-    else:
-        pass
-else:
-    pass
-
+        # This can be changed in the future, but for now if both the input is a pdb and initial guess is given a file, complain and exit. 
+        for file in args.input_files:
+            ext = os.path.splitext(file)[1]
+            if ext not in ["fasta","fa"]:
+                logger.warning(f"Two structures are supplied for the same sequence (the input and --initial_guess [file]). We don't")
+                logger.warning(f"know which to use for the initial guess. Either supply --initial_guess with a pdb file and input .fasta")
+                logger.warning(f"or use --initial_guess without a file and use an input file format that contains a structure. (e.g. not fasta). exiting.")
+                exit(1)
 
 # blatently stolen from https://github.com/sokrypton/ColabFold/blob/8e6b6bb582f40a4fea06b19fc001d3d9ca208197/colabfold/alphafold/msa.py#L15
 # by konstin i think
@@ -656,7 +745,7 @@ def make_fixed_size(feat, runner, max_length):
         #     shape_placeholders.NUM_EXTRA_SEQ: cfg.model.embeddings_and_evoformer.num_extra_msa,
         #     shape_placeholders.NUM_TEMPLATES: 0,
         # }
-        print("Warning: padding sequences in multimer mode is not implemented yet")
+        logging.warning("padding sequences in multimer mode is not implemented yet")
         return feat
     else:
         shape_schema = {k: [None] + v for k, v in dict(cfg.data.eval.feat).items()}
@@ -885,384 +974,393 @@ model_runner = model.RunModel(
     return_representations=args.save_intermediates,
 )
 
-with tqdm.tqdm(total=len(query_targets)) as pbar1:
-    for target in query_targets:
+if PBAR:
+    pbar1 = tqdm.tqdm(total=len(query_targets))
+
+for target in query_targets:
+    if PBAR:
         pbar1.set_description(f"Input: {target.name}")
 
-        # this is a lazy hack to avoid replacing var names.
-        full_sequence = target.seq.replace("/", "")
-        query_sequences = target.seq.split("/")
-        name = target.name
+    # this is a lazy hack to avoid replacing var names.
+    full_sequence = target.seq.replace("/", "")
+    query_sequences = target.seq.split("/")
+    name = target.name
 
-        #############################
-        # define input features
-        #############################
+    #############################
+    # define input features
+    #############################
 
-        # I anticipate a bug where the initial guess is not long enough
-        if not args.initial_guess:  # initial guess is False by default
-            initial_guess = None
-        elif type(args.initial_guess) == str:  # use the provided pdb
-            initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
-        else:  # use the target structure
-            initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
+    # I anticipate a bug where the initial guess is not long enough
+    if not args.initial_guess:  # initial guess is False by default
+        initial_guess = None
+    elif type(args.initial_guess) == str:  # use the provided pdb
+        initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
+    else:  # use the target structure
+        initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
 
-        num_res = len(full_sequence)
-        feature_dict = {}
-        msas = [parsers.Msa([full_sequence], [[0] * len(full_sequence)], [name])]
+    num_res = len(full_sequence)
+    feature_dict = {}
+    msas = [parsers.Msa([full_sequence], [[0] * len(full_sequence)], [name])]
 
-        if args.version == "multimer":
+    if args.version == "multimer":
 
-            feature_dict = pipeline_multimer.DataPipelineFaker().process(
-                query_sequences
-            )
-        else:
-            feature_dict.update(
-                pipeline.make_sequence_features(full_sequence, name, num_res)
-            )
-            feature_dict.update(pipeline.make_msa_features(msas))
+        feature_dict = pipeline_multimer.DataPipelineFaker().process(
+            query_sequences
+        )
+    else:
+        feature_dict.update(
+            pipeline.make_sequence_features(full_sequence, name, num_res)
+        )
+        feature_dict.update(pipeline.make_msa_features(msas))
 
-            Ls = [len(chain_seq) for chain_seq in query_sequences]
-            Ls_plot = sum([[len(seq)] for seq in query_sequences], [])
-            # this introduces a bug where the plot just doesn't work for multimer version
+        Ls = [len(chain_seq) for chain_seq in query_sequences]
+        Ls_plot = sum([[len(seq)] for seq in query_sequences], [])
+        # this introduces a bug where the plot just doesn't work for multimer version
 
-            feature_dict["residue_index"] = cf.chain_break(
-                feature_dict["residue_index"], Ls
-            )
+        feature_dict["residue_index"] = cf.chain_break(
+            feature_dict["residue_index"], Ls
+        )
 
-            if args.initial_guess:
-                feature_dict.update(mk_mock_template(query_sequences))
+        if args.initial_guess:
+            feature_dict.update(mk_mock_template(query_sequences))
 
-        ###########################
-        # run alphafold
-        ###########################
-        def parse_results(prediction_result, processed_feature_dict):
+    ###########################
+    # run alphafold
+    ###########################
+    def parse_results(prediction_result, processed_feature_dict):
 
-            # figure note... it would be nice to use prediction_result["structure_module"]["final_atom_mask"] to mask out everything in prediction_result that shouldn't be there due to padding.
-            b_factors = (
-                prediction_result["plddt"][:, None]
-                * prediction_result["structure_module"][
-                    "final_atom_mask"
-                ]  # I think not needed b/c I truncated the vector earlier
-            )
+        # figure note... it would be nice to use prediction_result["structure_module"]["final_atom_mask"] to mask out everything in prediction_result that shouldn't be there due to padding.
+        b_factors = (
+            prediction_result["plddt"][:, None]
+            * prediction_result["structure_module"][
+                "final_atom_mask"
+            ]  # I think not needed b/c I truncated the vector earlier
+        )
 
-            # but for now let's focus on truncating the results we most care about to the length of the target sequence
-            prediction_result["plddt"] = prediction_result["plddt"][: len(target.seq)]
-            if "predicted_aligned_error" in prediction_result:
-                prediction_result["predicted_aligned_error"] = prediction_result[
-                    "predicted_aligned_error"
-                ][: len(target.seq), : len(target.seq)]
+        # but for now let's focus on truncating the results we most care about to the length of the target sequence
+        prediction_result["plddt"] = prediction_result["plddt"][: len(target.seq)]
+        if "predicted_aligned_error" in prediction_result:
+            prediction_result["predicted_aligned_error"] = prediction_result[
+                "predicted_aligned_error"
+            ][: len(target.seq), : len(target.seq)]
 
-            dist_bins = jax.numpy.append(0, prediction_result["distogram"]["bin_edges"])
-            dist_mtx = dist_bins[prediction_result["distogram"]["logits"].argmax(-1)]
-            contact_mtx = jax.nn.softmax(prediction_result["distogram"]["logits"])[
-                :, :, dist_bins < 8
-            ].sum(-1)
+        dist_bins = jax.numpy.append(0, prediction_result["distogram"]["bin_edges"])
+        dist_mtx = dist_bins[prediction_result["distogram"]["logits"].argmax(-1)]
+        contact_mtx = jax.nn.softmax(prediction_result["distogram"]["logits"])[
+            :, :, dist_bins < 8
+        ].sum(-1)
 
-            out = {
-                "unrelaxed_protein": protein.from_prediction(
-                    processed_feature_dict,
-                    prediction_result,
-                    b_factors=b_factors,
-                    remove_leading_feature_dimension=args.type != "multimer",
-                ),
-                "plddt": prediction_result["plddt"],
-                "mean_plddt": prediction_result["plddt"].mean(),
-                "dists": dist_mtx,
-                "adj": contact_mtx,
-            }
+        out = {
+            "unrelaxed_protein": protein.from_prediction(
+                processed_feature_dict,
+                prediction_result,
+                b_factors=b_factors,
+                remove_leading_feature_dimension=args.type != "multimer",
+            ),
+            "plddt": prediction_result["plddt"],
+            "mean_plddt": prediction_result["plddt"].mean(),
+            "dists": dist_mtx,
+            "adj": contact_mtx,
+        }
 
-            if "ptm" in prediction_result:
-                out.update(
-                    {
-                        "pae": prediction_result["predicted_aligned_error"],
-                        "pTMscore": prediction_result["ptm"],
-                    }
-                )
-            if args.type == "multimer":
-                out.update(
-                    {
-                        "pTMscore": prediction_result["ptm"],
-                        "pae": prediction_result["predicted_aligned_error"],
-                        "iptm": prediction_result["iptm"],
-                    }
-                )
-            return out
-
-        total = len(model_names) * len(seed_range)
-
-        with tqdm.tqdm(total=total) as pbar2:
-            outs = {}
-
-            def report(key):
-                pbar2.update(n=1)
-                o = outs[key]
-                out_dict = {}
-                out_dict["mean_plddt"] = o["mean_plddt"]
-
-                out_dict["recycles"] = o["recycles"]
-                out_dict["tol"] = o["tol"]
-                out_dict["model"] = key.split("_")[1]
-                out_dict["type"] = args.type
-                out_dict["seed"] = key.split("_")[-1]
-
-                output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
-                if args.type == "monomer_ptm" or args.type == "multimer":
-                    output_line += f" pTMscore:{o['pTMscore']:.2f}"
-
-                prefix = f"{name}_{key}"
-                fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
-
-                output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
-
-                output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
-                output_pdbstr = renumber(output_pdbstr)
-
-                import string
-
-                alphabet = string.ascii_uppercase + string.digits + string.ascii_lowercase
-                chain_range_map = get_chain_range_map(output_pdbstr)
-
-                num_chains = len(chain_range_map)
-
-                final_chain_order = list(
-                    alphabet[:num_chains]
-                )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
-
-                pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                if args.reference_pdb is not None:
-                    if args.simple_rmsd:
-                        rmsd = pymol_align(
-                            "temp_target",
-                            reference_pdb_name, "super"
-                        )
-                    else:
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", reference_pdb_name, "super"
-                        )  # use super here b/c sequence is not guaranteed to be very similar
-
-                    out_dict["rmsd_to_reference"] = rmsd
-                    pymol.cmd.delete("temp_target")
-                    output_line += f" rmsd_to_reference:{rmsd:0.2f}"
-
-                if target.pymol_obj_name is not None:
-                    if args.simple_rmsd:
-                        rmsd = pymol_align(
-                            "temp_target", target.pymol_obj_name
-                        )
-                    else:
-
-                        # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
-                        pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", target.pymol_obj_name
-                        )
-
-                    out_dict["rmsd_to_input"] = rmsd
-                    pymol.cmd.delete("temp_target")
-                    output_line += f" rmsd_to_input:{rmsd:0.2f}"
-
-                with open(fout_name, "w") as f:
-                    f.write(output_pdbstr)
-
-                final_chain_order_mapping = {
-                    old_chain: new_chain
-                    for old_chain, new_chain in zip(alphabet, final_chain_order)
+        if "ptm" in prediction_result:
+            out.update(
+                {
+                    "pae": prediction_result["predicted_aligned_error"],
+                    "pTMscore": prediction_result["ptm"],
                 }
+            )
+        if args.type == "multimer":
+            out.update(
+                {
+                    "pTMscore": prediction_result["ptm"],
+                    "pae": prediction_result["predicted_aligned_error"],
+                    "iptm": prediction_result["iptm"],
+                }
+            )
+        return out
 
-                import itertools
+    total = len(model_names) * len(seed_range)
 
-                if args.type == "monomer_ptm":
-                    # calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
-                    pae = o["pae"]
+    if PBAR:
+        pbar2 = tqdm.tqdm(total=total)
 
-                    # first, truncate the matrix to the full length of the sequence (without chainbreak characters "/"). It can sometimes be too long because of padding inputs
-                    sequence_length = len(target.seq.replace("/", "").replace("U", ""))
-                    pae = pae[:sequence_length, :sequence_length]
+    outs = {}
 
-                    if args.output_pae:
-                        out_dict["pae"] = pae
+    def report(key):
+        if PBAR:
+            pbar2.update(n=1)
+        o = outs[key]
+        out_dict = {}
+        out_dict["mean_plddt"] = o["mean_plddt"]
 
-                    interaction_paes = []
-                    for chain_1, chain_2 in itertools.permutations(
-                        final_chain_order, 2
-                    ):
-                        chain_1_range_start, chain_1_range_stop = chain_range_map[
-                            chain_1
-                        ]
-                        chain_2_range_start, chain_2_range_stop = chain_range_map[
-                            chain_2
-                        ]
+        out_dict["recycles"] = o["recycles"]
+        out_dict["tol"] = o["tol"]
+        out_dict["model"] = key.split("_")[1]
+        out_dict["type"] = args.type
+        out_dict["seed"] = key.split("_")[-1]
 
-                        final_chain_1 = final_chain_order_mapping[chain_1]
-                        final_chain_2 = final_chain_order_mapping[chain_2]
-                        interaction_pae = np.mean(
-                            pae[
-                                chain_1_range_start:chain_1_range_stop,
-                                chain_2_range_start:chain_2_range_stop,
-                            ]
-                        )
-                        interaction_paes.append(interaction_pae)
-                        out_dict[
-                            f"mean_pae_interaction_{final_chain_1}{final_chain_2}"
-                        ] = interaction_pae
+        output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
+        if args.type == "monomer_ptm" or args.type == "multimer":
+            output_line += f" pTMscore:{o['pTMscore']:.2f}"
 
-                    # average all the interaction PAEs
-                    out_dict["mean_pae_interaction"] = np.mean(interaction_paes)
+        prefix = f"{name}_{key}"
+        fout_name = os.path.join(args.out_dir, f"{prefix}_unrelaxed.pdb")
 
-                    # calculate mean intra-chain PAE per chain
-                    intra_chain_paes = []
-                    for chain in alphabet[:num_chains]:
-                        chain_range_start, chain_range_stop = chain_range_map[chain]
-                        intra_chain_pae = np.mean(
-                            pae[
-                                chain_range_start:chain_range_stop,
-                                chain_range_start:chain_range_stop,
-                            ]
-                        )
-                        intra_chain_paes.append(intra_chain_pae)
-                        out_dict[f"mean_pae_intra_chain_{chain}"] = intra_chain_pae
+        output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
 
-                    # average all the intrachain PAEs
-                    out_dict["mean_pae_intra_chain"] = np.mean(intra_chain_paes)
+        output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
+        output_pdbstr = renumber(output_pdbstr)
 
-                    # average all the PAEs
-                    out_dict["mean_pae"] = np.mean(pae)
+        import string
 
-                    out_dict["pTMscore"] = o["pTMscore"]
-                elif args.type == "multimer":
-                    out_dict["ptm"] = o["pTMscore"]
-                    out_dict["iptm"] = o["iptm"]
+        alphabet = string.ascii_uppercase + string.digits + string.ascii_lowercase
+        chain_range_map = get_chain_range_map(output_pdbstr)
 
-                if args.show_images:
-                    fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
-                    plt.savefig(
-                        os.path.join(args.out_dir, f"{prefix}.png"),
-                        bbox_inches="tight",
-                    )
-                    plt.close(fig)
+        num_chains = len(chain_range_map)
 
-                if args.amber_relax:
-                    # Relax the prediction.
-                    relaxed_pdb_str, _, _ = amber_relaxer.process(
-                        prot=o["unrelaxed_protein"]
-                    )
+        final_chain_order = list(
+            alphabet[:num_chains]
+        )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
 
-                    # Save the relaxed PDB.
-                    relaxed_output_path = os.path.join(
-                        args.out_dir, f"{prefix}_relaxed.pdb"
-                    )
-                    with open(relaxed_output_path, "w") as f:
-                        f.write(relaxed_pdb_str)
+        pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
+        if args.reference_pdb is not None:
+            if args.simple_rmsd:
+                rmsd = pymol_align(
+                    "temp_target",
+                    reference_pdb_name, "super"
+                )
+            else:
+                rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                    "temp_target", reference_pdb_name, "super"
+                )  # use super here b/c sequence is not guaranteed to be very similar
 
-                # np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
+            out_dict["rmsd_to_reference"] = rmsd
+            pymol.cmd.delete("temp_target")
+            output_line += f" rmsd_to_reference:{rmsd:0.2f}"
 
-                # cast devicearray to serializable type
-                for key in out_dict:
-                    out_dict[key] = np.array(out_dict[key]).tolist()
+        if target.pymol_obj_name is not None:
+            if args.simple_rmsd:
+                rmsd = pymol_align(
+                    "temp_target", target.pymol_obj_name
+                )
+            else:
 
-                import json
-
-                # output as nicely formatted json
-                global time_checkpoint
-                elapsed_time = time.time() - time_checkpoint
-                output_line += f" elapsed time (s): {elapsed_time}"
-
-                if args.output_summary:
-                    with open(os.path.join(args.out_dir, "reports.txt"), "a") as f:
-                        f.write(output_line + "\n")
-                print(output_line)
-
-                out_dict["elapsed_time"] = elapsed_time
-
-                with open(
-                    os.path.join(args.out_dir, f"{prefix}_prediction_results.json"),
-                    "w",
-                ) as f:
-                    json.dump(out_dict, f, indent=2)
-
-                time_checkpoint = time.time()
-
-            #######################################################################
-
-            # go through each random_seed
-            for seed in seed_range:
-
-                # prep input features
-                processed_feature_dict = model_runner.process_features(
-                    feature_dict, random_seed=seed
+                # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
+                pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
+                rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                    "temp_target", target.pymol_obj_name
                 )
 
-                # pad input features
-                # Pad sequences to the same length
-                ##sequence padding
-                # I'm not sure if this is compatible with multimer version or not, but I'll stick it here for now
-                # model_config = model_runner.config
-                # eval_cfg = model_config.data.eval
-                # crop_feats = {k: [None] + v for k, v in dict(eval_cfg.feat).items()}
-                # print(crop_feats)
-                # feature_dict = make_fixed_size(
-                #     feature_dict,
-                #     crop_feats,
-                #     args.mock_msa_depth,
-                #     args.mock_msa_depth,
-                #     max_length,
-                # )
-                processed_feature_dict = make_fixed_size(
-                    processed_feature_dict, model_runner, max_length
+            out_dict["rmsd_to_input"] = rmsd
+            pymol.cmd.delete("temp_target")
+            output_line += f" rmsd_to_input:{rmsd:0.2f}"
+
+        with open(fout_name, "w") as f:
+            f.write(output_pdbstr)
+
+        final_chain_order_mapping = {
+            old_chain: new_chain
+            for old_chain, new_chain in zip(alphabet, final_chain_order)
+        }
+
+        import itertools
+
+        if args.type == "monomer_ptm":
+            # calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
+            pae = o["pae"]
+
+            # first, truncate the matrix to the full length of the sequence (without chainbreak characters "/"). It can sometimes be too long because of padding inputs
+            sequence_length = len(target.seq.replace("/", "").replace("U", ""))
+            pae = pae[:sequence_length, :sequence_length]
+
+            if args.output_pae:
+                out_dict["pae"] = pae
+
+            interaction_paes = []
+            for chain_1, chain_2 in itertools.permutations(
+                final_chain_order, 2
+            ):
+                chain_1_range_start, chain_1_range_stop = chain_range_map[
+                    chain_1
+                ]
+                chain_2_range_start, chain_2_range_stop = chain_range_map[
+                    chain_2
+                ]
+
+                final_chain_1 = final_chain_order_mapping[chain_1]
+                final_chain_2 = final_chain_order_mapping[chain_2]
+                interaction_pae = np.mean(
+                    pae[
+                        chain_1_range_start:chain_1_range_stop,
+                        chain_2_range_start:chain_2_range_stop,
+                    ]
                 )
+                interaction_paes.append(interaction_pae)
+                out_dict[
+                    f"mean_pae_interaction_{final_chain_1}{final_chain_2}"
+                ] = interaction_pae
 
-                # go through each model
-                for num, model_name in enumerate(model_names):
-                    model_mod = ""
-                    if args.type == "monomer_ptm":
-                        model_mod = "_ptm"
-                    elif args.type == "multimer":
-                        model_mod = "_multimer"
-                    model_name = model_name + model_mod
-                    key = f"{model_name}_seed_{seed}"
-                    pbar2.set_description(f"Running {key}")
+            # average all the interaction PAEs
+            out_dict["mean_pae_interaction"] = np.mean(interaction_paes)
 
-                    # check if this prediction/seed has already been done
-                    prefix = f"{name}_{key}"
-                    if not args.overwrite and os.path.exists(
-                        os.path.join(args.out_dir, f"{prefix}_prediction_results.json")
-                    ):
-                        print(f"{prefix}_prediction_results.json already exists")
-                        continue
+            # calculate mean intra-chain PAE per chain
+            intra_chain_paes = []
+            for chain in alphabet[:num_chains]:
+                chain_range_start, chain_range_stop = chain_range_map[chain]
+                intra_chain_pae = np.mean(
+                    pae[
+                        chain_range_start:chain_range_stop,
+                        chain_range_start:chain_range_stop,
+                    ]
+                )
+                intra_chain_paes.append(intra_chain_pae)
+                out_dict[f"mean_pae_intra_chain_{chain}"] = intra_chain_pae
 
-                    # replace model parameters
-                    params = data.get_model_haiku_params(
-                        model_name, data_dir=ALPHAFOLD_DATADIR
-                    )
-                    for k in model_runner.params.keys():
-                        model_runner.params[k] = params[k]
+            # average all the intrachain PAEs
+            out_dict["mean_pae_intra_chain"] = np.mean(intra_chain_paes)
 
-                    # predict
-                    if args.initial_guess:
-                        prediction_result, (r, t) = cf.to(
-                            model_runner.predict(
-                                processed_feature_dict,
-                                random_seed=seed,
-                                initial_guess=initial_guess,
-                            ),
-                            device,
-                        )  # is this ok?
-                    else:
-                        # a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?).
-                        # the fix will be to update Multimer code to accept initial_guess deep down in the actual code
-                        prediction_result, (r, t) = cf.to(
-                            model_runner.predict(
-                                processed_feature_dict, random_seed=seed
-                            ),
-                            device,
-                        )  # is this ok?
+            # average all the PAEs
+            out_dict["mean_pae"] = np.mean(pae)
 
-                    # save results
-                    outs[key] = parse_results(prediction_result, processed_feature_dict)
-                    outs[key].update({"recycles": r, "tol": t})
-                    report(key)
+            out_dict["pTMscore"] = o["pTMscore"]
+        elif args.type == "multimer":
+            out_dict["ptm"] = o["pTMscore"]
+            out_dict["iptm"] = o["iptm"]
 
-                    del prediction_result, params
-                del processed_feature_dict
+        if args.show_images:
+            fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
+            plt.savefig(
+                os.path.join(args.out_dir, f"{prefix}.png"),
+                bbox_inches="tight",
+            )
+            plt.close(fig)
 
+        if args.amber_relax:
+            # Relax the prediction.
+            relaxed_pdb_str, _, _ = amber_relaxer.process(
+                prot=o["unrelaxed_protein"]
+            )
+
+            # Save the relaxed PDB.
+            relaxed_output_path = os.path.join(
+                args.out_dir, f"{prefix}_relaxed.pdb"
+            )
+            with open(relaxed_output_path, "w") as f:
+                f.write(relaxed_pdb_str)
+
+        # np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
+
+        # cast devicearray to serializable type
+        for key in out_dict:
+            out_dict[key] = np.array(out_dict[key]).tolist()
+
+        
+
+        # output as nicely formatted json
+        global time_checkpoint
+        elapsed_time = time.time() - time_checkpoint
+        output_line += f" elapsed time (s): {elapsed_time}"
+
+        if args.output_summary:
+            with open(os.path.join(args.out_dir, "reports.txt"), "a") as f:
+                f.write(output_line + "\n")
+        logger.info(output_line)
+
+        out_dict["elapsed_time"] = elapsed_time
+
+        with open(
+            os.path.join(args.out_dir, f"{prefix}_prediction_results.json"),
+            "w",
+        ) as f:
+            json.dump(out_dict, f, indent=2)
+
+        time_checkpoint = time.time()
+
+    #######################################################################
+
+    # go through each random_seed
+    for seed in seed_range:
+
+        # prep input features
+        processed_feature_dict = model_runner.process_features(
+            feature_dict, random_seed=seed
+        )
+
+        # pad input features
+        # Pad sequences to the same length
+        ##sequence padding
+        # I'm not sure if this is compatible with multimer version or not, but I'll stick it here for now
+        # model_config = model_runner.config
+        # eval_cfg = model_config.data.eval
+        # crop_feats = {k: [None] + v for k, v in dict(eval_cfg.feat).items()}
+        # print(crop_feats)
+        # feature_dict = make_fixed_size(
+        #     feature_dict,
+        #     crop_feats,
+        #     args.mock_msa_depth,
+        #     args.mock_msa_depth,
+        #     max_length,
+        # )
+        processed_feature_dict = make_fixed_size(
+            processed_feature_dict, model_runner, max_length
+        )
+
+        # go through each model
+        for num, model_name in enumerate(model_names):
+            model_mod = ""
+            if args.type == "monomer_ptm":
+                model_mod = "_ptm"
+            elif args.type == "multimer":
+                model_mod = "_multimer"
+            model_name = model_name + model_mod
+            key = f"{model_name}_seed_{seed}"
+            if PBAR:
+                pbar2.set_description(f"Running {key}")
+
+            # check if this prediction/seed has already been done
+            prefix = f"{name}_{key}"
+            if not args.overwrite and os.path.exists(
+                os.path.join(args.out_dir, f"{prefix}_prediction_results.json")
+            ):
+                logger.warning(f"{prefix}_prediction_results.json already exists. Skiping...")
+                continue
+
+            # replace model parameters
+            params = data.get_model_haiku_params(
+                model_name, data_dir=ALPHAFOLD_DATADIR
+            )
+            for k in model_runner.params.keys():
+                model_runner.params[k] = params[k]
+
+            # predict
+            if args.initial_guess:
+                prediction_result, (r, t) = cf.to(
+                    model_runner.predict(
+                        processed_feature_dict,
+                        random_seed=seed,
+                        initial_guess=initial_guess,
+                    ),
+                    device,
+                )  # is this ok?
+            else:
+                # a quick hack because the multimer version of the model_runner doesn't have initial_guess in its signature (is that the term?).
+                # the fix will be to update Multimer code to accept initial_guess deep down in the actual code
+                prediction_result, (r, t) = cf.to(
+                    model_runner.predict(
+                        processed_feature_dict, random_seed=seed
+                    ),
+                    device,
+                )  # is this ok?
+
+            # save results
+            outs[key] = parse_results(prediction_result, processed_feature_dict)
+            outs[key].update({"recycles": r, "tol": t})
+            report(key)
+
+            del prediction_result, params
+        del processed_feature_dict
+
+    if PBAR:
+        pbar2.close()
         pbar1.update(1)

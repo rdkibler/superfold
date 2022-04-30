@@ -2,7 +2,7 @@
 
 cluster=`sacctmgr list cluster | head -n3 | tail -n1 | awk '{$1=$1};1' | cut -d ' ' -f1`
 
-echo "running on ${cluster}"
+#echo "running on ${cluster}"
 
 case $cluster in
 
