@@ -236,7 +236,7 @@ if args.quiet:
     logger.setLevel(logging.ERROR)
     PBAR = False
 else:
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     PBAR = True
 
 import subprocess
@@ -332,13 +332,30 @@ def get_chain_range_map(pdbstr):
     return chain_range_map
 
 
-def get_chain_permutations(chains: list) -> list:
+def get_chain_permutations(chain_set: list) -> list:
     """
     Gets all permutations of the chains.
+    chain_set is a list of lists of chains which are grouped by identity.
+    e.g. if chain_set = [['A', 'B', 'C'], ['D']] then the output will be
+    [A,B,C,D]
+    [A,C,B,D]
+    [B,A,C,D]
+    [B,C,A,D]
+    [C,A,B,D]
+    [C,B,A,D]
     """
     import itertools
+    #product of the permutations of each group
+    permutations = [
+        list(itertools.permutations(group)) for group in chain_set
+    ]
+    products = list(itertools.product(*permutations))
+    orders = [
+        list(itertools.chain(*product )) for product in products
+    ]
 
-    return list(itertools.permutations(chains))
+    return orders
+
 
 def pymol_align(pymol_object_name: str, reference_pdb: str, alignmnet_mode: str = "align") -> float:
     """
@@ -355,7 +372,6 @@ def pymol_align(pymol_object_name: str, reference_pdb: str, alignmnet_mode: str 
 
     return rmsd
 
-# TODO refactor this code to only rearrange identical sequences to find better fits.
 def pymol_multichain_align(
     model_pymol_name: str, reference_pymol_name: str, alignment_mode: str = "align"
 ) -> Tuple[float, str, list]:
@@ -377,11 +393,22 @@ def pymol_multichain_align(
 
     chains = pymol.cmd.get_chains(model_pymol_name)
 
+    # get the sequence of each chain
+    grouped_chains = defaultdict(list)
+    for chain in chains:
+        chain_seq = "".join(pymol.cmd.get_fastastr(f"{model_pymol_name} and chain {chain}").split("\n")[1:])
+        grouped_chains[chain_seq].append(chain)
+    chain_set = grouped_chains.values()
+
+    logger.debug(f"CHAIN_SET: {chain_set}")
+
     align_func = getattr(pymol.cmd, alignment_mode)
 
     best_rmsd = float("inf")
     best_order = None
-    for new_order in get_chain_permutations(chains):
+
+    for new_order in get_chain_permutations(chain_set):
+        
         # make a temporary object with the new order of chains
         pymol.cmd.delete(temp_pymol_name)
         pymol.cmd.create(temp_pymol_name, model_pymol_name)
@@ -391,6 +418,7 @@ def pymol_multichain_align(
             f"{reference_pymol_name} and n. CA",
             cycles=0,
         )[0]
+        logger.debug(f"tried {new_order} with rmsd {rmsd}")
 
         if rmsd < best_rmsd:
             best_order = new_order
@@ -403,7 +431,7 @@ def pymol_multichain_align(
     pymol.cmd.delete(temp_pymol_name)
     pymol.cmd.delete(best_pymol_name)
 
-    return best_rmsd, best_pdbstr, best_order
+    return best_rmsd, best_pdbstr, best_order, chain_set
 
 
 def convert_pdb_chainbreak_to_new_chain(pdbstring):
@@ -1131,7 +1159,7 @@ for target in query_targets:
                     reference_pdb_name, "super"
                 )
             else:
-                rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                rmsd, output_pdbstr, final_chain_order, chain_set = pymol_multichain_align(
                     "temp_target", reference_pdb_name, "super"
                 )  # use super here b/c sequence is not guaranteed to be very similar
 
@@ -1148,13 +1176,15 @@ for target in query_targets:
 
                 # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
                 pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                rmsd, output_pdbstr, final_chain_order, chain_set = pymol_multichain_align(
                     "temp_target", target.pymol_obj_name
                 )
 
             out_dict["rmsd_to_input"] = rmsd
             pymol.cmd.delete("temp_target")
             output_line += f" rmsd_to_input:{rmsd:0.2f}"
+
+        output_pdbstr = renumber(output_pdbstr)
 
         with open(fout_name, "w") as f:
             f.write(output_pdbstr)
