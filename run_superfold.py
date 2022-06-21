@@ -79,16 +79,16 @@ parser.add_argument(
 
 parser.add_argument(
     "--type",
-    choices=["monomer", "monomer_ptm", "multimer"],
+    choices=["monomer", "monomer_ptm", "multimer", "multimer_v2"],
     default="monomer_ptm",
-    help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. The use of multimer weights with standard AF2 probably won't work",
+    help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. 'multimer_v2' is updated AF2-Multimer that is supposed to yield fewer clashes. The use of multimer weights with standard AF2 probably won't work",
 )
 
 parser.add_argument(
     "--version",
     choices=["monomer", "multimer"],
     default="monomer",
-    help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' version is equivalent to AF2-Multimer and should not be used with the monomer weight types.",
+    help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' versions are equivalent to AF2-Multimer and should not be used with the monomer weight types.",
 )
 
 parser.add_argument(
@@ -548,7 +548,7 @@ from alphafold.common import protein
 from alphafold.data import parsers
 
 # I don't know if this is a good idea.
-if args.version == "multimer":
+if args.version == "multimer" or args.version == "multimer_v2":
     from alphafold.data import pipeline_multimer
 from alphafold.data import pipeline
 
@@ -837,7 +837,7 @@ if type(args.initial_guess) == str:
 max_length = max([len(tgt) for tgt in query_targets])
 
 
-if args.type == "multimer":
+if args.type == "multimer" or args.type == "multimer_v2":
     model_name = "model_5_multimer"
 else:
     model_name = "model_5_ptm" if args.type == "monomer_ptm" else "model_5"
@@ -851,7 +851,7 @@ else:
 cfg = config.model_config(model_name)
 params = data.get_model_haiku_params(model_name, data_dir=ALPHAFOLD_DATADIR)
 
-if args.version == "multimer":
+if args.version == "multimer" or args.version == "multimer_v2":
     cfg.model.num_ensemble_eval = args.num_ensemble
     # cfg.model.embeddings_and_evoformer.num_extra_msa = args.mock_msa_depth
     cfg.model.embeddings_and_evoformer.masked_msa.replace_fraction = args.pct_seq_mask
@@ -910,7 +910,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         feature_dict = {}
         msas = [parsers.Msa([full_sequence], [[0] * len(full_sequence)], [name])]
 
-        if args.version == "multimer":
+        if args.version == "multimer" or args.version == "multimer_v2":
 
             feature_dict = pipeline_multimer.DataPipelineFaker().process(
                 query_sequences
@@ -963,7 +963,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     processed_feature_dict,
                     prediction_result,
                     b_factors=b_factors,
-                    remove_leading_feature_dimension=args.type != "multimer",
+                    remove_leading_feature_dimension=(args.type != "multimer" and args.type != "multimer_v2"),
                 ),
                 "plddt": prediction_result["plddt"],
                 "mean_plddt": prediction_result["plddt"].mean(),
@@ -978,7 +978,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                         "pTMscore": prediction_result["ptm"],
                     }
                 )
-            if args.type == "multimer":
+            if args.type == "multimer" or args.type == "multimer_v2":
                 out.update(
                     {
                         "pTMscore": prediction_result["ptm"],
@@ -1006,7 +1006,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 out_dict["seed"] = key.split("_")[-1]
 
                 output_line = f"{name} {key} recycles:{o['recycles']} tol:{o['tol']:.2f} mean_plddt:{o['mean_plddt']:.2f}"
-                if args.type == "monomer_ptm" or args.type == "multimer":
+                if args.type == "monomer_ptm" or args.type == "multimer" or args.type == "multimer_v2":
                     output_line += f" pTMscore:{o['pTMscore']:.2f}"
 
                 prefix = f"{name}_{key}"
@@ -1129,7 +1129,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     out_dict["mean_pae"] = np.mean(pae)
 
                     out_dict["pTMscore"] = o["pTMscore"]
-                elif args.type == "multimer":
+                elif args.type == "multimer" or args.type == "multimer_v2":
                     out_dict["ptm"] = o["pTMscore"]
                     out_dict["iptm"] = o["iptm"]
 
@@ -1218,6 +1218,8 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                         model_mod = "_ptm"
                     elif args.type == "multimer":
                         model_mod = "_multimer"
+                    elif args.type == "multimer_v2":
+                        model_mod = "_multimer_v2"
                     model_name = model_name + model_mod
                     key = f"{model_name}_seed_{seed}"
                     pbar2.set_description(f"Running {key}")
