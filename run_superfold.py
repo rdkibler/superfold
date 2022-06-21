@@ -132,7 +132,7 @@ parser.add_argument(
 # )
 
 # unknown if this currently works
-parser.add_argument("--show_images", action="store_true")
+# parser.add_argument("--show_images", action="store_true")
 
 parser.add_argument(
     "--output_pae",
@@ -221,9 +221,9 @@ import silent_tools  # installed as a submodule
 from dataclasses import dataclass
 from typing import Union, Tuple, Dict
 import numpy as np
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 
-plt.switch_backend("agg")
+# plt.switch_backend("agg")
 
 os.makedirs(args.out_dir, exist_ok=True)
 
@@ -1133,13 +1133,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     out_dict["ptm"] = o["pTMscore"]
                     out_dict["iptm"] = o["iptm"]
 
-                if args.show_images:
-                    fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
-                    plt.savefig(
-                        os.path.join(args.out_dir, f"{prefix}.png"),
-                        bbox_inches="tight",
-                    )
-                    plt.close(fig)
+                # if args.show_images:
+                #     fig = cf.plot_protein(o["unrelaxed_protein"], Ls=Ls_plot, dpi=200)
+                #     plt.savefig(
+                #         os.path.join(args.out_dir, f"{prefix}.png"),
+                #         bbox_inches="tight",
+                #     )
+                #     plt.close(fig)
 
                 if args.amber_relax:
                     # Relax the prediction.
