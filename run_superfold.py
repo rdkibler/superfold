@@ -604,13 +604,13 @@ seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 
 # TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
 if type(args.initial_guess) == str:  # check input_file type
-    if ".pdb" in args.input_files[0]:
+    if args.input_files[0].endswith(".pdb"):
         print("WARNING: initial guess was provided a PDB and input_file was a PDB")
         print(
             "No followup argument is needed for initial guess when input_file is a PDB"
         )
         exit(1)
-    elif ".silent" in args.input_files[0]:
+    elif args.input_files[0].endswith(".silent"):
         print("WARNING: initial guess was provided a PDB and input_file was a .silent")
         print(
             "No followup argument is needed for initial guess when input_file is a silent"
@@ -620,7 +620,7 @@ if type(args.initial_guess) == str:  # check input_file type
         pass
 else:
     pass
-if ".fa" in args.input_files[0]:
+if args.input_files[0].endswith(".fa"):
     if args.initial_guess is True:
         print("WARNING: initial guess needs a PDB if input_file was a fasta")
         exit(1)
