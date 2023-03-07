@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 
+#check for conda environment. If one is active, complain and exit
+if [ -z "$CONDA_DEFAULT_ENV" ]; then
+    : #do nothing
+else
+	echo "ERROR: a conda environment is active. This could interfere with the execution of this script. Please deactivate the current conda environment and try again."
+    exit 1
+fi
+
+
 cluster=`sacctmgr list cluster | head -n3 | tail -n1 | awk '{$1=$1};1' | cut -d ' ' -f1`
 
 echo "running on ${cluster}"
