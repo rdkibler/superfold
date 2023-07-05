@@ -5,6 +5,8 @@ if [ -z "$CONDA_DEFAULT_ENV" ]; then
     : #do nothing
 else
 	echo "ERROR: a conda environment is active. This could interfere with the execution of this script. Please deactivate the current conda environment and try again."
+	echo "For good measure, please also turn off conda's obnoxious automatic base env activation. See:"
+	echo "https://stackoverflow.com/questions/54429210/how-do-i-prevent-conda-from-activating-the-base-environment-by-default"
     exit 1
 fi
 
