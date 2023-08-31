@@ -81,14 +81,16 @@ parser.add_argument(
     "--type",
     choices=["monomer", "monomer_ptm", "multimer", "multimer_v2"],
     default="monomer_ptm",
-    help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. 'multimer_v2' is updated AF2-Multimer that is supposed to yield fewer clashes. The use of multimer weights with standard AF2 probably won't work",
+    #help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. 'multimer_v2' is updated AF2-Multimer that is supposed to yield fewer clashes. The use of multimer weights with standard AF2 probably won't work",
+    help="This option does not do anything anymore. The code will always use monomer_ptm weights. If you choose anything other than that, the program will exit without running predictions."
 )
 
 parser.add_argument(
     "--version",
     choices=["monomer", "multimer"],
     default="monomer",
-    help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' versions are equivalent to AF2-Multimer and should not be used with the monomer weight types.",
+    #help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' versions are equivalent to AF2-Multimer and should not be used with the monomer weight types.",
+    help="This option does not do anything anymore. The code will always use monomer code. If you choose anything other than that, the program will exit without running predictions. If you want to use the Multimer code, use ColabFold instead. "
 )
 
 parser.add_argument(
@@ -206,6 +208,12 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+
+
+#manage removed options
+if args.version != parser.get_default("version") or args.type != parser.get_default("type"):
+    exit("ERROR: multimer functionality is deprecated because AF2-multimer performs poorly on single sequence MSAs. Use colabfold instead to run multimer with MSAs. It is up to you to decide if it is theoretically/morally correct to use MSAs with de novo proteins. The non-ptm monomer weights have also been removed as they offer no benefit over the ptm weights.")
+
 
 #adding this to keep code working later on while I figure out how to make it work
 args.save_intermediates = False
@@ -602,32 +610,32 @@ seed_range = list(range(args.seed_start, args.seed_start + args.nstruct))
 #     print("WARNING: initial guess and multimer are not compatible. ")
 #     exit(1)
 
-# TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
-if type(args.initial_guess) == str:  # check input_file type
-    if args.input_files[0].endswith(".pdb"):
-        print("WARNING: initial guess was provided a PDB and input_file was a PDB")
-        print(
-            "No followup argument is needed for initial guess when input_file is a PDB"
-        )
-        exit(1)
-    elif args.input_files[0].endswith(".silent"):
-        print("WARNING: initial guess was provided a PDB and input_file was a .silent")
-        print(
-            "No followup argument is needed for initial guess when input_file is a silent"
-        )
-        exit(1)
-    else:
-        pass
-else:
-    pass
-if args.input_files[0].endswith(".fa"):
-    if args.initial_guess is True:
-        print("WARNING: initial guess needs a PDB if input_file was a fasta")
-        exit(1)
-    else:
-        pass
-else:
-    pass
+# # TODO initial guess needs a pdb file if and only if args.input_file is a fasta file
+# if type(args.initial_guess) == str:  # check input_file type
+#     if args.input_files[0].endswith(".pdb"):
+#         print("WARNING: initial guess was provided a PDB and input_file was a PDB")
+#         print(
+#             "No followup argument is needed for initial guess when input_file is a PDB"
+#         )
+#         exit(1)
+#     elif args.input_files[0].endswith(".silent"):
+#         print("WARNING: initial guess was provided a PDB and input_file was a .silent")
+#         print(
+#             "No followup argument is needed for initial guess when input_file is a silent"
+#         )
+#         exit(1)
+#     else:
+#         pass
+# else:
+#     pass
+# if args.input_files[0].endswith(".fa"):
+#     if args.initial_guess is True:
+#         print("WARNING: initial guess needs a PDB if input_file was a fasta")
+#         exit(1)
+#     else:
+#         pass
+# else:
+#     pass
 
 
 # blatently stolen from https://github.com/sokrypton/ColabFold/blob/8e6b6bb582f40a4fea06b19fc001d3d9ca208197/colabfold/alphafold/msa.py#L15
@@ -747,7 +755,7 @@ def af2_get_atom_positions(pymol_object_name) -> Tuple[np.ndarray, np.ndarray]:
     return all_positions, all_positions_mask
 
 
-def af2_all_atom_pymol_object_name(pymol_object_name):
+def af2_all_atom_pymol_object_name(pymol_object_name,pad_to=None):
     template_seq = "".join(
         [
             line
@@ -763,7 +771,10 @@ def af2_all_atom_pymol_object_name(pymol_object_name):
     templates_all_atom_positions = []
 
     # Initially fill will all zero values
-    for _ in template_seq:
+    pad_length = pad_to if pad_to is not None else len(template_seq)
+    assert pad_length >= len(template_seq)
+
+    for _ in range(pad_length):
         templates_all_atom_positions.append(
             jnp.zeros((residue_constants.atom_type_num, 3))
         )
@@ -817,6 +828,21 @@ def mk_mock_template(query_sequence):
 if args.reference_pdb is not None:
     reference_pdb_name = "REFERENCE"
     pymol.cmd.load(args.reference_pdb, reference_pdb_name)
+
+
+
+
+######## initial guess logic ########
+
+if type(args.initial_guess) == bool and args.initial_guess:
+    # if initial_guess is requested but no pdb is provided, we will use each 
+    #input structure as the initial guess. This means that the inputs
+    #must be pdb files.
+    for input_path in args.input_files:
+        if not input_path.endswith(".pdb"):
+            raise ValueError(
+                f"initial_guess is True but no pdb was provided. {input_path} is not a pdb file. What are we supposed to initialize with?"
+            )
 
 #### load up initial guess pdb, if present
 if type(args.initial_guess) == str:
@@ -898,13 +924,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         # define input features
         #############################
 
-        # I anticipate a bug where the initial guess is not long enough
         if not args.initial_guess:  # initial guess is False by default
             initial_guess = None
         elif type(args.initial_guess) == str:  # use the provided pdb
-            initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS")
+            initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS",pad_to=max_length)
         else:  # use the target structure
-            initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name)
+            print("Using target structure as initial guess")
+            initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name,pad_to=max_length)
 
         num_res = len(full_sequence)
         feature_dict = {}
