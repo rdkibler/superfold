@@ -81,14 +81,16 @@ parser.add_argument(
     "--type",
     choices=["monomer", "monomer_ptm", "multimer", "multimer_v2"],
     default="monomer_ptm",
-    help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. 'multimer_v2' is updated AF2-Multimer that is supposed to yield fewer clashes. The use of multimer weights with standard AF2 probably won't work",
+    #help="The flavor of alphafold weights to use. 'monomer' is the original AF2. 'ptm' is the original AF2 with an extra head that predicts pTMscore. 'multimer' is AF2-Multimer. 'multimer_v2' is updated AF2-Multimer that is supposed to yield fewer clashes. The use of multimer weights with standard AF2 probably won't work",
+    help="This option does not do anything anymore. The code will always use monomer_ptm weights. If you choose anything other than that, the program will exit without running predictions."
 )
 
 parser.add_argument(
     "--version",
     choices=["monomer", "multimer"],
     default="monomer",
-    help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' versions are equivalent to AF2-Multimer and should not be used with the monomer weight types.",
+    #help="The version of AF2 Module to use. Both versions can predict both mulimers. When used to predict multimers, the 'monomer' version is equivalent to AF2-Gap. The 'multimer' versions are equivalent to AF2-Multimer and should not be used with the monomer weight types.",
+    help="This option does not do anything anymore. The code will always use monomer code. If you choose anything other than that, the program will exit without running predictions. If you want to use the Multimer code, use ColabFold instead. "
 )
 
 parser.add_argument(
@@ -206,6 +208,12 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+
+
+#manage removed options
+if args.version != parser.get_default("version") or args.type != parser.get_default("type"):
+    exit("ERROR: multimer functionality is deprecated because AF2-multimer performs poorly on single sequence MSAs. Use colabfold instead run multimer with MSAs. It is up to you to decide if it is theoretically/morally correct to use MSAs with de novo proteins. The non-ptm monomer weights have also been removed as they offer no benefit over the ptm weights.")
+
 
 #adding this to keep code working later on while I figure out how to make it work
 args.save_intermediates = False
