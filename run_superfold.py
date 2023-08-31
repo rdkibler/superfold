@@ -212,7 +212,7 @@ args = parser.parse_args()
 
 #manage removed options
 if args.version != parser.get_default("version") or args.type != parser.get_default("type"):
-    exit("ERROR: multimer functionality is deprecated because AF2-multimer performs poorly on single sequence MSAs. Use colabfold instead run multimer with MSAs. It is up to you to decide if it is theoretically/morally correct to use MSAs with de novo proteins. The non-ptm monomer weights have also been removed as they offer no benefit over the ptm weights.")
+    exit("ERROR: multimer functionality is deprecated because AF2-multimer performs poorly on single sequence MSAs. Use colabfold instead to run multimer with MSAs. It is up to you to decide if it is theoretically/morally correct to use MSAs with de novo proteins. The non-ptm monomer weights have also been removed as they offer no benefit over the ptm weights.")
 
 
 #adding this to keep code working later on while I figure out how to make it work
