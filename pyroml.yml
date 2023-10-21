@@ -116,7 +116,7 @@ https://repo.anaconda.com/pkgs/main/noarch/ptyprocess-0.7.0-pyhd3eb1b0_2.tar.bz2
 https://conda.anaconda.org/conda-forge/noarch/pycparser-2.20-pyh9f0ad1d_2.tar.bz2
 https://repo.anaconda.com/pkgs/main/noarch/pyparsing-2.4.7-pyhd3eb1b0_0.tar.bz2
 https://repo.anaconda.com/pkgs/main/linux-64/pyrsistent-0.17.3-py38h7b6447c_0.tar.bz2
-https://conda.graylab.jhu.edu/linux-64/python-blosc-1.8.3-py38hb3f55d8_0.tar.bz2
+#https://conda.graylab.jhu.edu/linux-64/python-blosc-1.8.3-py38hb3f55d8_0.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/python_abi-3.8-1_cp38.tar.bz2
 https://repo.anaconda.com/pkgs/main/noarch/pytz-2021.1-pyhd3eb1b0_0.tar.bz2
 https://repo.anaconda.com/pkgs/main/linux-64/pyzmq-20.0.0-py38h2531618_1.tar.bz2
@@ -212,4 +212,4 @@ https://conda.anaconda.org/schrodinger/linux-64/pymol-bundle-2.5.1-0.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/widgetsnbextension-3.5.1-py38h578d9bd_4.tar.bz2
 https://conda.anaconda.org/conda-forge/noarch/ipywidgets-7.6.4-pyhd8ed1ab_0.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/jupyter-1.0.0-py38h578d9bd_6.tar.bz2
-https://conda.graylab.jhu.edu/linux-64/pyrosetta-2021.35+release.4431687-py38_0.tar.bz2
+#https://conda.graylab.jhu.edu/linux-64/pyrosetta-2021.35+release.4431687-py38_0.tar.bz2
