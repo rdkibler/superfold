@@ -3,3 +3,4 @@
 alphafold/common/stereo_chemical_props.txt
 benchmark/
 pyroml/
+mmalign/MMalign

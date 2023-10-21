@@ -11,6 +11,7 @@ import time
 time_checkpoint = time.time()
 import argparse
 import os
+import itertools
 
 # from Bio import SeqIO
 parser = argparse.ArgumentParser()
@@ -158,7 +159,7 @@ parser.add_argument(
 parser.add_argument(
     "--amber_relax",
     action="store_true",
-    help="use AMBER to relax the structure after prediction",
+    help="Amber relax is unsupported and enabling this option will cause the program to exit. This option is left in for backwards compatibility.",
 )
 parser.add_argument(
     "--overwrite",
@@ -181,7 +182,8 @@ parser.add_argument(
 parser.add_argument(
     "--simple_rmsd",
     action="store_true",
-    help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders.",
+    #help="compute RMSD directly with the alphafold prediction and without trying to rearrange chain orders.",
+    help="This option does not do anything anymore. The code will always use MMalign for superimposing outputs."
 )
 
 # sidechain_relax_parser = parser.add_mutually_exclusive_group(required=False)
@@ -214,6 +216,9 @@ args = parser.parse_args()
 if args.version != parser.get_default("version") or args.type != parser.get_default("type"):
     exit("ERROR: multimer functionality is deprecated because AF2-multimer performs poorly on single sequence MSAs. Use colabfold instead to run multimer with MSAs. It is up to you to decide if it is theoretically/morally correct to use MSAs with de novo proteins. The non-ptm monomer weights have also been removed as they offer no benefit over the ptm weights.")
 
+if args.amber_relax:
+    print("ERROR: Amber relax is currently broken and I don't intend to fix it.")
+    exit(1)
 
 #adding this to keep code working later on while I figure out how to make it work
 args.save_intermediates = False
@@ -400,6 +405,67 @@ def pymol_multichain_align(
     return best_rmsd, best_pdbstr, best_order
 
 
+
+import subprocess
+import os
+
+mmalign_exe = f"{SCRIPTDIR}/mmalign/MMalign"
+
+#ensure it exists
+if not os.path.exists(mmalign_exe):
+    print(f"ERROR: {mmalign_exe} does not exist. Please run 'g++ -static -O3 -ffast-math -lm -o MMalign MMalign.cpp' in the mmalign directory")
+    raise FileNotFoundError
+
+from typing import Tuple
+import tempfile
+
+def pymol_MMalign(
+    model_pymol_name: str, reference_pymol_name: str
+) -> Tuple[float, float, Dict[str,str]]:
+    """
+    Aligns two multichain models in pymol using MMalign.
+    Returns the RMSD,TMscore, and the aligned model.
+    """
+
+    import random
+    import string
+
+    #decend into a temporary directory
+    with tempfile.TemporaryDirectory() as tempdir:
+        #save the two models to pdb files
+        model_path = f"{tempdir}/model.pdb"
+        reference_path = f"{tempdir}/reference.pdb"
+        pymol.cmd.save(model_path, model_pymol_name)
+        pymol.cmd.save(reference_path, reference_pymol_name)
+        aligned_model_path = f"{tempdir}/output.pdb"
+
+        #run mmalign
+        mmalign_proc = subprocess.Popen([mmalign_exe, model_path, reference_path,'-outfmt',"2","-o",aligned_model_path], stdout=subprocess.PIPE)
+        mmalign_output = mmalign_proc.communicate()[0].decode("utf-8")
+
+        #parse the output
+        data_line = mmalign_output.split("\n")[1]
+        rmsd = float(data_line.split()[4])
+        tmscore = float(data_line.split()[3])
+        model_chain_order_1 = data_line.split()[0].split(":")[1:]
+        reference_chain_order_2 = data_line.split()[1].split(":")[1:]
+        
+        #might be backwards, who knows
+        chain_order_mapping = dict(zip(model_chain_order_1,reference_chain_order_2))
+
+        #update pymol
+        pymol.cmd.delete(model_pymol_name)
+        pymol.cmd.load(aligned_model_path, model_pymol_name)
+        return rmsd, tmscore, chain_order_mapping
+
+
+
+
+
+
+
+
+
 def convert_pdb_chainbreak_to_new_chain(pdbstring):
     previous_resid = 0
     chain_num = 0
@@ -570,22 +636,22 @@ device = xla_bridge.get_backend().platform
 print("using ", device)
 
 
-if args.amber_relax:
-    from alphafold.relax import relax
+# if args.amber_relax:
+#     from alphafold.relax import relax
 
-    RELAX_MAX_ITERATIONS = 0
-    RELAX_ENERGY_TOLERANCE = 2.39
-    RELAX_STIFFNESS = 10.0
-    RELAX_EXCLUDE_RESIDUES = []
-    RELAX_MAX_OUTER_ITERATIONS = 3
+#     RELAX_MAX_ITERATIONS = 0
+#     RELAX_ENERGY_TOLERANCE = 2.39
+#     RELAX_STIFFNESS = 10.0
+#     RELAX_EXCLUDE_RESIDUES = []
+#     RELAX_MAX_OUTER_ITERATIONS = 3
 
-    amber_relaxer = relax.AmberRelaxation(
-        max_iterations=RELAX_MAX_ITERATIONS,
-        tolerance=RELAX_ENERGY_TOLERANCE,
-        stiffness=RELAX_STIFFNESS,
-        exclude_residues=RELAX_EXCLUDE_RESIDUES,
-        max_outer_iterations=RELAX_MAX_OUTER_ITERATIONS,
-    )
+#     amber_relaxer = relax.AmberRelaxation(
+#         max_iterations=RELAX_MAX_ITERATIONS,
+#         tolerance=RELAX_ENERGY_TOLERANCE,
+#         stiffness=RELAX_STIFFNESS,
+#         exclude_residues=RELAX_EXCLUDE_RESIDUES,
+#         max_outer_iterations=RELAX_MAX_OUTER_ITERATIONS,
+#     )
 
 
 longest = max([len(tgt) for tgt in query_targets])
@@ -1054,23 +1120,34 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     alphabet[:num_chains]
                 )  # initialize with original order, basically, for the default case where there is no refernce or input pdb file
 
-                pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
+                final_chain_order_mapping = {
+                    old_chain: new_chain
+                    for old_chain, new_chain in zip(alphabet, final_chain_order)
+                }
+
+                output_pymol_name = "temp_target"
+                pymol.cmd.read_pdbstr(output_pdbstr, oname=output_pymol_name)
                 if args.reference_pdb is not None:
-                    if args.simple_rmsd:
-                        rmsd = pymol_align(
-                            "temp_target",
-                            reference_pdb_name, "super"
-                        )
-                    else:
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", reference_pdb_name, "super"
-                        )  # use super here b/c sequence is not guaranteed to be very similar
+                    # if args.simple_rmsd:
+                    #     rmsd = pymol_align(
+                    #         "temp_target",
+                    #         reference_pdb_name, "super"
+                    #     )
+                    # else:
+                    #     rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
+                    #         "temp_target", reference_pdb_name, "super"
+                    #     )  # use super here b/c sequence is not guaranteed to be very similar
+
+                    rmsd, tmscore, final_chain_order_mapping = pymol_MMalign(output_pymol_name, reference_pdb_name)
 
                     out_dict["rmsd_to_reference"] = rmsd
-                    pymol.cmd.delete("temp_target")
+                    out_dict["tmscore_to_reference"] = tmscore
+                    #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
 
                 if target.pymol_obj_name is not None:
+                    ########################################
+                    print("WARNING! THIS CODE NEEDS TO BE REMOVED BUT IS HERE FOR BENCHMARKING PURPOSES")
                     if args.simple_rmsd:
                         rmsd = pymol_align(
                             "temp_target", target.pymol_obj_name
@@ -1082,20 +1159,24 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                         rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
                             "temp_target", target.pymol_obj_name
                         )
+                    ########################################
+                    print("##### OLD RMSD: ", rmsd)
+
+                    rmsd, tmscore, final_chain_order_mapping = pymol_MMalign(output_pymol_name, target.pymol_obj_name)
+                    print("##### NEW RMSD: ", rmsd)
+
 
                     out_dict["rmsd_to_input"] = rmsd
-                    pymol.cmd.delete("temp_target")
+                    out_dict["tmscore_to_input"] = tmscore
+                    #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_input:{rmsd:0.2f}"
+                    
 
-                with open(fout_name, "w") as f:
-                    f.write(output_pdbstr)
+                # with open(fout_name, "w") as f:
+                #     f.write(output_pdbstr)
+                pymol.cmd.save(fout_name, output_pymol_name)
+                pymol.cmd.delete(output_pymol_name)
 
-                final_chain_order_mapping = {
-                    old_chain: new_chain
-                    for old_chain, new_chain in zip(alphabet, final_chain_order)
-                }
-
-                import itertools
 
                 if args.type == "monomer_ptm":
                     # calculate mean PAE for interactions between each chain pair, taking into account the changed chain order
@@ -1167,18 +1248,18 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 #     )
                 #     plt.close(fig)
 
-                if args.amber_relax:
-                    # Relax the prediction.
-                    relaxed_pdb_str, _, _ = amber_relaxer.process(
-                        prot=o["unrelaxed_protein"]
-                    )
+                # if args.amber_relax:
+                #     # Relax the prediction.
+                #     relaxed_pdb_str, _, _ = amber_relaxer.process(
+                #         prot=o["unrelaxed_protein"]
+                #     )
 
-                    # Save the relaxed PDB.
-                    relaxed_output_path = os.path.join(
-                        args.out_dir, f"{prefix}_relaxed.pdb"
-                    )
-                    with open(relaxed_output_path, "w") as f:
-                        f.write(relaxed_pdb_str)
+                #     # Save the relaxed PDB.
+                #     relaxed_output_path = os.path.join(
+                #         args.out_dir, f"{prefix}_relaxed.pdb"
+                #     )
+                #     with open(relaxed_output_path, "w") as f:
+                #         f.write(relaxed_pdb_str)
 
                 # np.savez_compressed(os.path.join(args.out_dir,f'{prefix}_prediction_results.npz'),**out_dict)
 

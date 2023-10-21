@@ -30,6 +30,7 @@ of silent_tools, so you could remove the pyrosetta line from the .yml and be fin
 8) `$pip install absl-py dm-tree tensorflow ml-collections`
 9) `$pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_releases.html`
 10) `$pip install dm-haiku 
+11) Compile MMalign
 
 ### Model parameters
 
@@ -101,7 +102,8 @@ The contents of each output file are as follows:
 ### Code contributors
 
 *   Ryan Kibler
-TODO finish contributors lol
+*   Adam Broerman
+*   Phil Leung
 
 ### 3rd party libraries and packages
 SuperFold communicates with and/or references the following separate libraries
@@ -125,8 +127,8 @@ and packages:
 *   [TensorFlow](https://github.com/tensorflow/tensorflow)
 *   [Tree](https://github.com/deepmind/tree)
 *   [tqdm](https://github.com/tqdm/tqdm)
+*   MMalign
 
-TODO: are there some that need to be added/removed?
 
 We thank all their contributors and maintainers!
 
@@ -162,3 +164,8 @@ terms and conditions or license provisions. Your use of the third-party
 software, libraries or code is subject to any such terms and you should check
 that you can comply with any applicable restrictions or terms and conditions
 before use.
+
+
+MM-align (Version 20210816): complex structure alignment           
+References: S Mukherjee, Y Zhang. Nucl Acids Res 37(11):e83 (2009) 
+Please email comments and suggestions to yangzhanglab@umich.edu    
