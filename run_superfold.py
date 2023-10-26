@@ -236,6 +236,8 @@ from typing import Union, Tuple, Dict
 import numpy as np
 # from matplotlib import pyplot as plt
 
+from info_collection import InfoCollector
+
 # plt.switch_backend("agg")
 
 os.makedirs(args.out_dir, exist_ok=True)
@@ -405,7 +407,6 @@ def pymol_multichain_align(
     return best_rmsd, best_pdbstr, best_order
 
 
-
 import subprocess
 import os
 
@@ -461,7 +462,8 @@ def pymol_MMalign(
 
 
 
-
+def compute_per_residue_lddt(query_path:str, reference_path:str):
+    raise NotImplementedError
 
 
 
@@ -495,6 +497,7 @@ class PredictionTarget:
     name: str
     seq: str
     pymol_obj_name: str = None
+    input_path: str = None
 
     def __lt__(self, other):
         return len(self) < len(other)
@@ -554,7 +557,7 @@ def parse_pdb(path):
         [line if not line.startswith(">") else "/" for line in fastastring.split()[1:]]
     )
 
-    return [PredictionTarget(name, seq, pymol_obj_name)]
+    return [PredictionTarget(name, seq, pymol_obj_name, path)]
 
 
 def parse_silent(path):
@@ -588,7 +591,7 @@ def parse_silent(path):
             ]
         )
 
-        outputs.append(PredictionTarget(name, seq, pymol_obj_name))
+        outputs.append(PredictionTarget(name, seq, pymol_obj_name, path))
 
     return outputs
 
@@ -896,8 +899,6 @@ if args.reference_pdb is not None:
     pymol.cmd.load(args.reference_pdb, reference_pdb_name)
 
 
-
-
 ######## initial guess logic ########
 
 if type(args.initial_guess) == bool and args.initial_guess:
@@ -977,6 +978,8 @@ model_runner = model.RunModel(
     return_representations=args.save_intermediates,
 )
 
+
+output_counter = 0
 with tqdm.tqdm(total=len(query_targets)) as pbar1:
     for target in query_targets:
         pbar1.set_description(f"Input: {target.name}")
@@ -1142,6 +1145,12 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                     out_dict["rmsd_to_reference"] = rmsd
                     out_dict["tmscore_to_reference"] = tmscore
+
+                    #send this back up for the info-recorder
+                    if target.pymol_obj_name is None:
+                        outs[key]["rmsd_to_input"] = rmsd #bit of a lie
+                        outs[key]["tmscore_to_input"] = tmscore
+
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
 
@@ -1168,14 +1177,37 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                     out_dict["rmsd_to_input"] = rmsd
                     out_dict["tmscore_to_input"] = tmscore
+
+                    #send this back up for the info-recorder
+                    outs[key]["rmsd_to_input"] = rmsd
+                    outs[key]["tmscore_to_input"] = tmscore
+
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_input:{rmsd:0.2f}"
-                    
+                
+                #re-extract the per-residue lddt values from the b-factor column of the pdb
+                myspace = {'bfactors': []}
+                pymol.cmd.iterate(output_pymol_name, 'bfactors.append(b)', space=myspace)
+                plddt_list = myspace['bfactors']
+                outs[key]["plddts"] = plddt_list
 
                 # with open(fout_name, "w") as f:
                 #     f.write(output_pdbstr)
                 pymol.cmd.save(fout_name, output_pymol_name)
                 pymol.cmd.delete(output_pymol_name)
+
+                # TO BE IMPLEMENTED
+                # #compute real per-residue lddts
+                # if target.pymol_obj_name is not None:
+                #     query_path = fout_name
+                #     with tempfile.NamedTemporaryFile() as reference_file:
+                #         pymol.cmd.save(reference_file.name, target.pymol_obj_name)
+                #         reference_path = reference_file.name
+                #         lddt_list = compute_per_residue_lddt(query_path,reference_path)
+                #         out_dict["lddts"] = lddt_list
+                #         out_dict["mean_lddt"] = np.mean(lddt_list)
+                #         outs[key]['lddts'] = lddt_list #send this back up for the info-recorder. this is getting messy
+                
 
 
                 if args.type == "monomer_ptm":
@@ -1237,6 +1269,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                     out_dict["pTMscore"] = o["pTMscore"]
                 elif args.type == "multimer" or args.type == "multimer_v2":
+                    raise NotImplementedError
                     out_dict["ptm"] = o["pTMscore"]
                     out_dict["iptm"] = o["iptm"]
 
@@ -1320,6 +1353,22 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
 
                 # go through each model
                 for num, model_name in enumerate(model_names):
+
+
+                    info_recorder = InfoCollector()
+                    info_recorder['sequence'] = target.seq
+                    info_recorder['padded-length'] = max_length
+                    info_recorder['seed'] = seed
+                    info_recorder['source'] = target.input_path
+                    if target.pymol_obj_name is not None:
+                        #get the pdb string of the input structure as pymol has saved it
+                        info_recorder['input-pdb'] = pymol.cmd.get_pdbstr(target.pymol_obj_name)
+                    info_recorder['model-num'] =  model_name
+                    info_recorder['used-msa'] = False
+                    info_recorder['used-initial-guess'] = bool(args.initial_guess)
+                    info_recorder['used-templates'] = False
+                    info_recorder['output-number'] = output_counter
+
                     model_mod = ""
                     if args.type == "monomer_ptm":
                         model_mod = "_ptm"
@@ -1370,6 +1419,16 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     outs[key] = parse_results(prediction_result, processed_feature_dict)
                     outs[key].update({"recycles": r, "tol": t})
                     report(key)
+                    output_counter += 1
+
+                    info_recorder['pLDDT'] = outs[key]['plddts']
+                    #info_recorder['LDDT'] = outs[key]['lddts'] #to be implemented
+                    info_recorder['num-recycles'] = outs[key]['recycles']
+                    info_recorder['pae-matrix'] = outs[key]['pae']
+                    if 'rmsd_to_input' in outs[key].keys():
+                        info_recorder['rmsd'] = outs[key]['rmsd_to_input']
+                        info_recorder['TMscore'] = outs[key]['tmscore_to_input']
+                    info_recorder['pTMscore'] = outs[key]['pTMscore']
 
                     del prediction_result, params
                 del processed_feature_dict
