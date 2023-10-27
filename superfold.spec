@@ -8,6 +8,7 @@ IncludeCmd: yes
 %files
 /etc/localtime
 /etc/apt/sources.list
+/home/cdemakis/apptainer/files/bin/micromamba /opt/micromamba
 #/archive/software/Miniconda3-latest-Linux-x86_64.sh /opt/miniconda.sh
 
 %post
@@ -29,13 +30,41 @@ apt-get install -y git
 git clone https://github.com/rdkibler/superfold.git /opt/superfold
 
 # Install python packages
-apt-get install -y python3.9 python3-pip 
-apt-get install -y pymol
-pip install absl-py dm-tree tensorflow ml-collections tqdm
-pip install "jax[cuda]>=0.3.8,<0.4" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-pip install dm-haiku
-pip install psutil
+rm -rf /usr/lib/terminfo
+export MAMBA_ROOT_PREFIX=/usr
+export MAMBA_EXE="/opt/micromamba";
+eval "$(/opt/micromamba shell hook -s posix)"
+export CONDA_OVERRIDE_CUDA=12
+#bash /opt/miniconda.sh -b -u -p /usr
+#conda install \
+micromamba install -p /usr \
+    -c pyg \
+    -c pytorch \
+    -c schrodinger \
+    -c dglteam/label/cu117 \
+    -c conda-forge \
+    -c bioconda \
+    -c nvidia \
+    python=3.9 \
+    cudatoolkit=11.4 \
+    tensorflow \
+    cudnn=8.2 \
+    pip \
+    numpy=1.23.5 \
+    scipy \
+    pandas \
+    biopython=1.78 \
+    psutil \
+    tqdm \
+    absl-py \
+    dm-tree \
+    immutabledict \
+    chex \
+    pymol \
+    jax \
+    jaxlib=*=*cuda*py39* \
 
+pip install ml-collections dm-haiku
 
 
 # Download and link to the alphafold weights
@@ -47,9 +76,12 @@ rm /opt/weights/alphafold_params_2022-12-06.tar
 echo /opt/weights/ > /opt/superfold/alphafold_weights.pth
 
 # Clean up
+#conda clean -a -y
+micromamba clean -a -y
 apt-get -y purge git
 apt-get -y autoremove
 apt-get clean
+#rm /opt/miniconda.sh
 
 %environment
 export PATH=$PATH:/usr/local/cuda/bin
