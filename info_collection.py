@@ -7,6 +7,7 @@ import psutil
 import threading
 import hashlib
 import json
+import numpy as np
 
 _run_monitor_signal = True
 
@@ -20,43 +21,53 @@ class InfoCollector(object):
     """
 
     _protocol_version = '1.0'
-    _dropoff_dir = "/net/shared/af2_info/"
+    _dropoff_dir = "/net/scratch/db/af2/data"
+    _collect_data_file = "/net/scratch/db/af2/config.json"
 
     def __init__(self,tag=None) -> None:
         """Initialize an InfoCollector object.
         JSON fields:
-        (x) username: STRING
-        (x) timestamp: NUMBER (approx time prediction completed)
-        (x) compute-node: STRING
-        (x) num-cpu: NUMBER
-        (x) cpu-ids: ARRAY of NUMBER
-        (x) cpu-types: ARRAY of STRING
-        (x) gpu-types: ARRAY of STRING
-        (x) gpu-ids: ARRAY of STRING
-        (x) script: STRING
-        (x) interpreter: STRING
-        (x) tag: STRING (custom for subsets)
-        ( ) sequence: STRING
-        ( ) padded-length: NUMBER
-        ( ) seed: NUMBER
-        ( ) input-pdb: STRING (PDB contents)
-        ( ) source: STRING (path to input pdb)
-        ( ) pLDDT: ARRAY of NUMBER
-        ( ) LDDT: ARRAY of NUMBER
-        ( ) model-num: NUMBER (integer, 1-5)
-        ( ) num-recycles: NUMBER (integer)
-        ( ) pae-matrix: ARRAY of NUMBER (flattened 2D array)
-        ( ) rmsd: NUMBER
-        ( ) TMscore: NUMBER
-        ( ) pTMscore: NUMBER
-        ( ) iptm: NUMBER
-        ( ) used-msa: BOOL
-        ( ) used-initial-guess: BOOL 
-        ( ) used-templates: BOOL
-        ( ) runtime: NUMBER (in sec)
-        ( ) output-number: NUMBER (serial number of outputs produced by this job)
+        username: STRING
+        timestamp: INT
+        runtime: FLOAT
+        compute-node: STRING
+        num-cpu: INT
+        cpu-ids: LIST of INT
+        cpu-types: LIST of STRING
+        gpu-types: LIST of STRING
+        gpu-ids: LIST of STRING
+        script: STRING
+        interpreter: STRING
+        tag: STRING
+        max_system_memory: INT
+        max_gpu_memory: INT
+        af2-version: STRING
+        sequence: STRING
+        padded-length: INT
+        seed: INT
+        input-pdb: STRING
+        source: STRING
+        pLDDT: LIST of FLOAT
+        LDDT: FLOAT
+        model-num: INT
+        num-recycles: INT
+        pae-matrix: LIST of LIST of FLOAT
+        rmsd: FLOAT
+        TMscore: FLOAT
+        pTMscore: FLOAT
+        iptm: FLOAT
+        used-msa: BOOL
+        used-initial-guess: BOOL
+        used-templates: BOOL
+        output-number: INT
 
         """
+
+        collection_configuration = json.load(open(self._collect_data_file))
+        self._run_collection_flag = collection_configuration['run_collection']
+        if not self._run_collection_flag:
+            return
+
         self._time_start = time.time()
         self._process = psutil.Process(os.getpid())
 
@@ -111,6 +122,7 @@ class InfoCollector(object):
 
 
         #the remainder get initized to none and will have to be implemented in the af2 script
+        self._info['af2-version'] = None
         self._info['sequence'] = None
         self._info['padded-length'] = None
         self._info['seed'] = None
@@ -237,13 +249,31 @@ class InfoCollector(object):
         if current_gpumem:
             self._info['max_gpu_memory'] = max(self._info['max_gpu_memory'], current_gpumem)
 
+    def __getitem__(self, key):
+        """Get an item from the info dict."""
+        return self._info[key]
+    
+    def __setitem__(self, key, value):
+        """Set an item in the info dict."""
+        if key in self._info:
+            self._info[key] = value
+        else :
+            raise KeyError(f"Key {key} not found in info dict and cannot be set.")
+
     def report(self) -> None:
         """Print a report of the information collected."""
+        if not self._run_collection_flag:
+            return
+        
         self._stop_memory_monitor()
         stop_time = time.time()
         self._info['runtime'] = stop_time - self._time_start
         #record timestamp as unix epoch time
         self._info['timestamp'] = int(time.time())
+
+        # cast devicearray to serializable type
+        for key in self._info:
+            self._info[key] = np.array(self._info[key]).tolist()
 
         file_contents = json.dumps(self._info)
 

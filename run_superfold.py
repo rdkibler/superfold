@@ -1038,7 +1038,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 * prediction_result["structure_module"][
                     "final_atom_mask"
                 ]  # I think not needed b/c I truncated the vector earlier
-            )
+            )            
 
             # but for now let's focus on truncating the results we most care about to the length of the target sequence
             prediction_result["plddt"] = prediction_result["plddt"][: len(target.seq)]
@@ -1187,7 +1187,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 
                 #re-extract the per-residue lddt values from the b-factor column of the pdb
                 myspace = {'bfactors': []}
-                pymol.cmd.iterate(output_pymol_name, 'bfactors.append(b)', space=myspace)
+                pymol.cmd.iterate(output_pymol_name + " and n. CA", 'bfactors.append(b)', space=myspace)
                 plddt_list = myspace['bfactors']
                 outs[key]["plddts"] = plddt_list
 
@@ -1368,6 +1368,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     info_recorder['used-initial-guess'] = bool(args.initial_guess)
                     info_recorder['used-templates'] = False
                     info_recorder['output-number'] = output_counter
+                    info_recorder['af2-version'] = args.type
 
                     model_mod = ""
                     if args.type == "monomer_ptm":
@@ -1422,13 +1423,19 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     output_counter += 1
 
                     info_recorder['pLDDT'] = outs[key]['plddts']
+
+                    #pLDDT is currently a list of all atoms, but we want to report the pLDDT of the Ca atoms only
+
+
                     #info_recorder['LDDT'] = outs[key]['lddts'] #to be implemented
                     info_recorder['num-recycles'] = outs[key]['recycles']
-                    info_recorder['pae-matrix'] = outs[key]['pae']
+                    info_recorder['pae-matrix'] = outs[key]['pae'].tolist()
                     if 'rmsd_to_input' in outs[key].keys():
                         info_recorder['rmsd'] = outs[key]['rmsd_to_input']
                         info_recorder['TMscore'] = outs[key]['tmscore_to_input']
                     info_recorder['pTMscore'] = outs[key]['pTMscore']
+
+                    info_recorder.report()
 
                     del prediction_result, params
                 del processed_feature_dict
