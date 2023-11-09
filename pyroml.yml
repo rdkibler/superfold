@@ -11,7 +11,7 @@ https://conda.anaconda.org/schrodinger/linux-64/libholoplaycore-0.1.0_rc4-1.tar.
 https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-ng-9.3.0-h6de172a_18.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/llvm-openmp-11.1.0-h4bd325d_0.tar.bz2
 https://repo.anaconda.com/pkgs/main/linux-64/pandoc-2.12-h06a4308_0.tar.bz2
-#https://conda.anaconda.org/schrodinger/noarch/pymol-web-examples-2.4-1.tar.bz2
+https://conda.anaconda.org/schrodinger/noarch/pymol-web-examples-2.4-1.tar.bz2
 https://conda.anaconda.org/schrodinger/linux-64/rigimol-1.3-2.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-1_llvm.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/libgcc-ng-9.3.0-h2828fa1_18.tar.bz2
@@ -205,10 +205,10 @@ https://conda.anaconda.org/conda-forge/noarch/requests-2.25.1-pyhd3deb0d_0.tar.b
 https://conda.anaconda.org/conda-forge/noarch/jupyter_console-6.4.0-pyhd8ed1ab_0.tar.bz2
 https://repo.anaconda.com/pkgs/main/linux-64/nbconvert-6.0.7-py38_0.tar.bz2
 https://conda.anaconda.org/conda-forge/noarch/pdb2pqr-3.2.0-pyhd8ed1ab_0.tar.bz2
-#https://conda.anaconda.org/schrodinger/linux-64/pymol-2.5.1-py38hffc77be_0.tar.bz2
+https://conda.anaconda.org/schrodinger/linux-64/pymol-2.5.1-py38hffc77be_0.tar.bz2
 https://conda.anaconda.org/conda-forge/noarch/qtconsole-5.1.1-pyhd8ed1ab_0.tar.bz2
 https://repo.anaconda.com/pkgs/main/linux-64/notebook-6.3.0-py38h06a4308_0.tar.bz2
-#https://conda.anaconda.org/schrodinger/linux-64/pymol-bundle-2.5.1-0.tar.bz2
+https://conda.anaconda.org/schrodinger/linux-64/pymol-bundle-2.5.1-0.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/widgetsnbextension-3.5.1-py38h578d9bd_4.tar.bz2
 https://conda.anaconda.org/conda-forge/noarch/ipywidgets-7.6.4-pyhd8ed1ab_0.tar.bz2
 https://conda.anaconda.org/conda-forge/linux-64/jupyter-1.0.0-py38h578d9bd_6.tar.bz2
