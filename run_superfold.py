@@ -161,6 +161,7 @@ parser.add_argument(
     action="store_true",
     help="Amber relax is unsupported and enabling this option will cause the program to exit. This option is left in for backwards compatibility.",
 )
+
 parser.add_argument(
     "--overwrite",
     action="store_true",
@@ -226,7 +227,6 @@ args.save_intermediates = False
 assert args.mock_msa_depth > 0
 
 from pathlib import Path
-import pymol
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "silent_tools"))
@@ -243,92 +243,246 @@ from info_collection import InfoCollector
 os.makedirs(args.out_dir, exist_ok=True)
 
 
-def renumber(pdbstr):
-    previous_resid = None
-    new_resid = 0
-    new_atomid = 1
-
-    lines = [line for line in pdbstr.split("\n") if line[:4] == "ATOM"]
-    fixed_pdbstr = ""
-
-    for line in lines:
-        resid = int(line[22:26])
-        if resid != previous_resid:
-            new_resid += 1
-        new_line = (
-            line[:6]
-            + f"{new_atomid: >5}"
-            + line[11:22]
-            + f"{str(new_resid): >4}"
-            + line[26:]
-        )
-        previous_resid = resid
-        fixed_pdbstr += new_line + "\n"
-        new_atomid += 1
-    return fixed_pdbstr
 
 
-def pymol_renumber(sele="all"):
-    pdbstr = pymol.cmd.get_pdbstr(sele)
-
-    fixed_pdbstr = renumber(pdbstr)
-
-    pymol.cmd.delete(sele)
-    pymol.cmd.read_pdbstr(fixed_pdbstr, sele)
-
-
-def pymol_apply_new_chains(pymol_object_name: str, new_chains: list) -> None:
+#from David Juergens
+def np_kabsch(A,B):
     """
-    Applies the new chains to a pymol object in the current order of chains
+    Numpy version of kabsch algorithm. Superimposes B onto A
 
-    i.e. if the pymol object has chains A, B, C, D, and the new_chains list is D, B, A, C
-    it will turn current chain A into chain D, current chain B into chain B,
-    ccurrent chain C into chain A, and current chain D into chain C.
+    Parameters:
+        (A,B) np.array - shape (N,3) arrays of xyz crds of points
+
+
+    Returns:
+        rms - rmsd between A and B
+        R - rotation matrix to superimpose B onto A
+        rB - the rotated B coordinates
     """
-    import pymol
+    A = np.copy(A)
+    B = np.copy(B)
 
-    # first, make selections for each current chain so we don't lose track of them
-    chain_selections = []
-    for i, chain in enumerate(pymol.cmd.get_chains(pymol_object_name)):
-        chain_name = f"{pymol_object_name}_chain_{i}"
-        pymol.cmd.select(chain_name, f"{pymol_object_name} and chain {chain}")
-        chain_selections.append(chain_name)
+    def centroid(X):
+        # return the mean X,Y,Z down the atoms
+        return np.mean(X, axis=0, keepdims=True)
 
-    # print(pymol.cmd.get_names('all', 0))
-
-    # now, apply the new chains
-    for chain_selection, new_chain in zip(chain_selections, new_chains):
-        pymol.cmd.alter(chain_selection, f'chain = "{new_chain}"')
-
-    pymol.cmd.sort(pymol_object_name)
+    def rmsd(V,W, eps=0):
+        # First sum down atoms, then sum down xyz
+        N = V.shape[-2]
+        return np.sqrt(np.sum((V-W)*(V-W), axis=(-2,-1)) / N + eps)
 
 
-def get_chain_range_map(pdbstr):
-    # load into pymol
-    pymol.cmd.read_pdbstr(pdbstr, "chain_range_map_obj")
+    N, ndim = A.shape
 
-    space = {"chain_letters": []}
-    # iterate over residues
-    pymol.cmd.iterate(
-        "chain_range_map_obj and n. CA", "chain_letters.append(chain)", space=space
-    )
-    # save indices where chains start and stop
+    # move to centroid
+    A = A - centroid(A)
+    B = B - centroid(B)
 
-    prev_chain = "A"
-    chain_start = 0
-    chain_range_map = {}
-    for i, residue_chain in enumerate(space["chain_letters"]):
-        if residue_chain != prev_chain:
-            chain_stop = i
-            chain_range_map[prev_chain] = (chain_start, chain_stop)
-            chain_start = i
-        prev_chain = residue_chain
-    chain_stop = i
-    chain_range_map[prev_chain] = (chain_start, chain_stop)
-    # clean up
-    pymol.cmd.delete("chain_range_map_obj")
-    return chain_range_map
+    # computation of the covariance matrix
+    C = np.matmul(A.T, B)
 
+    # compute optimal rotation matrix using SVD
+    U,S,Vt = np.linalg.svd(C)
+
+
+    # ensure right handed coordinate system
+    d = np.eye(3)
+    d[-1,-1] = np.sign(np.linalg.det(Vt.T@U.T))
+
+    # construct rotation matrix
+    R = Vt.T@d@U.T
+
+    # get rotated coords
+    rB = B@R
+
+    # calculate rmsd
+    rms = rmsd(A,rB)
+
+    return rms, rB, R
+
+
+
+
+from collections import defaultdict
+import numpy as np
+
+class ParsedPDB:
+    """
+    A simple class for storing the parsed contents of a PDB file and handling PDB manipulations.
+    """
+    def __init__(self):
+        self.coords = np.array([])
+        self.atom_details = []
+        self.name = None
+
+    def copy(self):
+        new = ParsedPDB()
+        new.coords = np.copy(self.coords)
+        new.atom_details = [list(atom) for atom in self.atom_details]
+        new.name = self.name
+        return new
+
+    def parse_pdbstr(self, pdbstr):
+        self.coords = []
+        self.atom_details = []
+        for line in pdbstr.split("\n"):
+            if line.startswith("ATOM") or line.startswith("HETATM"):
+                atom = line.startswith("ATOM")
+                #00000000001111111111222222222233333333334444444444555555555566666666667777777777
+                #01234567890123456789012345678901234567890123456789012345678901234567890123456789
+                #ATOM      4  CA  GLY B   2      -4.825  -1.541  -6.447  1.00  0.00           C
+                atom_num = int(line[6:11])
+                atom_name = line[12:16]
+                resnum = int(line[22:26])
+                resname = line[17:20]
+                chain = line[21]
+                
+                x = float(line[30:38])
+                y = float(line[38:46])
+                z = float(line[46:54])
+
+                try:
+                    occupancy = float(line[54:60])
+                except ValueError:
+                    occupancy = 0.0
+                
+                try:
+                    bfactor = float(line[60:66])
+                except ValueError:
+                    bfactor = 0.0
+
+                try:    
+                    element = line[76:78]
+                except ValueError:
+                    element = "  "
+                
+                try:
+                    charge = line[78:80]
+                except ValueError:
+                    charge = "  "
+                
+                self.coords.append([x,y,z])
+                self.atom_details.append([atom, atom_num, atom_name, resnum, resname, chain, bfactor, element, occupancy, charge])
+
+        #convert coords to a numpy array
+        self.coords = np.array(self.coords)
+
+
+    def parse_pdb_file(self,path):
+        self.name = path.split("/")[-1].split(".pdb")[0]
+
+        with open(path) as f:
+            pdbstr = f.read()
+        self.parse_pdbstr(pdbstr)
+
+    def remap_chains(self, chain_mapping):
+        #chain_mapping is a dict of old_chain:new_chain
+        for atom in self.atom_details:
+            atom[5] = chain_mapping[atom[5]]
+
+    def get_pdbstr(self):
+        atom_num = 1
+        buffer = ""
+        for xyz,atom in zip(self.coords,self.atom_details):
+            x,y,z = xyz
+            #0:is_atom
+            #1:atom_num
+            #2:atom_name
+            #3:resnum
+            #4:resname
+            #5:chain
+            #00000000001111111111222222222233333333334444444444555555555566666666667777777777
+            #01234567890123456789012345678901234567890123456789012345678901234567890123456789
+            #ATOM      4  CA  GLY B   2      -4.825  -1.541  -6.447  1.00  0.00           C
+            
+
+            atom_name = atom[2]
+            resnum = atom[3]
+            resname = atom[4]
+            chain = atom[5]
+            bfactor = atom[6]
+            element = atom[7]
+            occupancy = atom[8]
+            charge = atom[9]
+            #resnum = f"{resnum_int:>4}"
+            ATOM_HETATM = "ATOM  " if atom[0] else "HETATM"
+
+            buffer += f"{ATOM_HETATM}{atom_num:>5} {atom_name} {resname} {chain}{resnum:>4}    {x:>8.3f}{y:>8.3f}{z:>8.3f}{occupancy:>6.2f}{bfactor:>6.2f}          {element:>2}{charge:>2}\n"
+            atom_num += 1
+        return buffer
+
+    def make_pdb_file(self, path):
+        with open(path, 'w') as f:
+            f.write(self.get_pdbstr())
+            
+
+    def get_ca_indices_bychain(self):
+        #return a dict of lists of indices of CA atoms
+        ca_indices_bychain = defaultdict(list)
+        for i,atom in enumerate(self.atom_details):
+            if atom[2] == ' CA ':
+                ca_indices_bychain[atom[5]].append(i)
+        return ca_indices_bychain
+
+    def renumber(self):
+        previous_resid = None
+        new_resid = 0
+        new_atomid = 1
+
+        #renumber the residues in the order they appear
+        for i,atom in enumerate(self.atom_details):
+            resid = int(atom[3])
+            if resid != previous_resid:
+                new_resid += 1
+            self.atom_details[i][3] = str(new_resid)
+            previous_resid = resid
+
+    def get_chain_range_map(self):
+        #returns a dict of chain:(resnum_start:resnum_stop)
+        chain_range_map = {}
+        for chain,indices in self.get_ca_indices_bychain().items():
+            indices = sorted(indices)
+            index_start = indices[0]
+            index_stop = indices[-1]
+            resnum_start = self.atom_details[index_start][3]
+            resnum_stop = self.atom_details[index_stop][3]
+            chain_range_map[chain] = (resnum_start, resnum_stop)
+        return chain_range_map
+    
+    def get_CA_coords(self):
+        CA_indices = []
+        for i,atom in enumerate(self.atom_details):
+            if atom[2] == ' CA ':
+                CA_indices.append(i)
+        return self.coords[CA_indices]
+
+    def rmsd_static(self, other):
+        #returns the CA rmsd between two ParsedPDB objects
+        #assumes that the two objects have the same number of atoms in the same order
+        return np.sqrt(np.mean((self.get_CA_coords() - other.get_CA_coords())**2))
+
+    def rmsd_kabsch(self,other):
+        #uses kabsch algorithm to superimpose other onto self and returns the rmsd
+        #assumes that the two objects have the same number of atoms in the same order
+        #the coordinates will NOT be updated
+        rms, rB, R = np_kabsch(self.get_CA_coords(), other.get_CA_coords())
+        return rms
+    
+    def get_seq(self):
+        #returns a fasta string of the sequence
+        seq = ""
+        prev_chain = self.atom_details[0][5]
+        for atom in self.atom_details:
+            if atom[5] != prev_chain:
+                seq += "/"
+                prev_chain = atom[5]
+            if atom[2] == ' CA ':
+                seq += atom[4]
+        return seq
+    
+    def total_length(self):
+        #returns the total length of the sequence
+        return len(self.get_seq().replace("/",""))
 
 def get_chain_permutations(chains: list) -> list:
     """
@@ -338,73 +492,8 @@ def get_chain_permutations(chains: list) -> list:
 
     return list(itertools.permutations(chains))
 
-def pymol_align(pymol_object_name: str, reference_pdb: str, alignmnet_mode: str = "align") -> float:
-    """
-    Naively align the output of alphafold to the reference pdb
-    """
-    import pymol
 
-    align_func = getattr(pymol.cmd, alignmnet_mode)
-    rmsd = align_func(
-        f"{pymol_object_name} and n. CA",
-        f"{reference_pdb} and n. CA",
-        cycles=0
-    )[0]
 
-    return rmsd
-
-# TODO refactor this code to only rearrange identical sequences to find better fits.
-def pymol_multichain_align(
-    model_pymol_name: str, reference_pymol_name: str, alignment_mode: str = "align"
-) -> Tuple[float, str, list]:
-    """
-    Aligns two multichain models using pymol.
-    Returns the RMSD and the aligned model.
-    """
-    import pymol
-    import random
-    import string
-
-    # generate a random prefix so we don't overwrite anything else in the pymol session
-    prefix = "".join(
-        random.choice(string.ascii_uppercase + string.digits) for _ in range(5)
-    )
-
-    temp_pymol_name = f"{prefix}_temp"
-    best_pymol_name = f"{prefix}_best"
-
-    chains = pymol.cmd.get_chains(model_pymol_name)
-
-    align_func = getattr(pymol.cmd, alignment_mode)
-
-    best_rmsd = float("inf")
-    best_order = None
-    for new_order in get_chain_permutations(chains):
-        # make a temporary object with the new order of chains
-        pymol.cmd.delete(temp_pymol_name)
-        pymol.cmd.create(temp_pymol_name, model_pymol_name)
-        pymol_apply_new_chains(temp_pymol_name, new_order)
-        rmsd = align_func(
-            f"{temp_pymol_name} and n. CA",
-            f"{reference_pymol_name} and n. CA",
-            cycles=0,
-        )[0]
-
-        # debug: useful to see if alignment is working
-        # print(f'{rmsd} {new_order}')
-
-        if rmsd < best_rmsd:
-            best_order = new_order
-            best_rmsd = rmsd
-            pymol.cmd.create(best_pymol_name, temp_pymol_name)
-
-    best_pdbstr = pymol.cmd.get_pdbstr(best_pymol_name)
-
-    # clean up
-    pymol.cmd.delete(temp_pymol_name)
-    pymol.cmd.delete(best_pymol_name)
-
-    return best_rmsd, best_pdbstr, best_order
 
 
 import subprocess
@@ -420,11 +509,12 @@ if not os.path.exists(mmalign_exe):
 from typing import Tuple
 import tempfile
 
-def pymol_MMalign(
-    model_pymol_name: str, reference_pymol_name: str
+
+def MMalign(
+    model:ParsedPDB, reference:ParsedPDB
 ) -> Tuple[float, float, Dict[str,str]]:
     """
-    Aligns two multichain models in pymol using MMalign.
+    Aligns two models using MMalign. Works with single and multiple chains.
     Returns the RMSD,TMscore, and the aligned model.
     """
 
@@ -436,8 +526,9 @@ def pymol_MMalign(
         #save the two models to pdb files
         model_path = f"{tempdir}/model.pdb"
         reference_path = f"{tempdir}/reference.pdb"
-        pymol.cmd.save(model_path, model_pymol_name)
-        pymol.cmd.save(reference_path, reference_pymol_name)
+        model.make_pdb_file(model_path)
+        reference.make_pdb_file(reference_path)
+
         aligned_model_path = f"{tempdir}/output.pdb"
 
         #run mmalign
@@ -454,19 +545,12 @@ def pymol_MMalign(
         #might be backwards, who knows
         chain_order_mapping = dict(zip(model_chain_order_1,reference_chain_order_2))
 
-        #update pymol
-        pymol.cmd.delete(model_pymol_name)
-        pymol.cmd.load(aligned_model_path, model_pymol_name)
+        #update model
+        model.parse_pdb_file(aligned_model_path)
         return rmsd, tmscore, chain_order_mapping
-
-
-
 
 def compute_per_residue_lddt(query_path:str, reference_path:str):
     raise NotImplementedError
-
-
-
 
 def convert_pdb_chainbreak_to_new_chain(pdbstring):
     previous_resid = 0
@@ -492,11 +576,11 @@ def convert_pdb_chainbreak_to_new_chain(pdbstring):
     return new_pdbstring
 
 
-@dataclass(frozen=True)
+@dataclass()
 class PredictionTarget:
     name: str
     seq: str
-    pymol_obj_name: str = None
+    parsed_pdb: str = None
     input_path: str = None
 
     def __lt__(self, other):
@@ -547,17 +631,11 @@ def get_unique_name():
 
 def parse_pdb(path):
     name = path.split("/")[-1].split(".pdb")[0]
-    pymol_obj_name = get_unique_name()
-    pymol.cmd.load(path, object=pymol_obj_name)
-    fastastring = pymol.cmd.get_fastastr(pymol_obj_name)
-    # kinda obtuse, sorry. Basically, split the string on newlines and throw out the leading ">blahblahblah" line b/c we don't need it
-    # then step through and (eventuallY) concat the normal seq lines. When it encounters a new ">blahbalbha" line, this signifies a chain
-    # break and put in the chainbreak char instead
-    seq = "".join(
-        [line if not line.startswith(">") else "/" for line in fastastring.split()[1:]]
-    )
+    parsed_pdb = ParsedPDB()
+    parsed_pdb.parse_pdb_file(path)
+    seq = parsed_pdb.get_seq()
 
-    return [PredictionTarget(name, seq, pymol_obj_name, path)]
+    return [PredictionTarget(name, seq, parsed_pdb, path)]
 
 
 def parse_silent(path):
@@ -579,19 +657,12 @@ def parse_silent(path):
         pdbstring = silent_tools.write_pdb_atoms(
             atoms, seq, ["CA"], chain_ids=chain_per_res
         )
-        pymol_obj_name = get_unique_name()
-        pymol.cmd.read_pdbstr("".join(pdbstring), oname=pymol_obj_name)
+        parsed_pdb = ParsedPDB()
+        parsed_pdb.parse_pdbstr("\n".join(pdbstring))
+        parsed_pdb.name = name
+        seq = parsed_pdb.get_seq() #new seq is properly formatted
 
-        # but you ask "why? you already have 'seq'!" Well, this one has chain breaks and I already wrote the code above for the pdb parsing
-        fastastring = pymol.cmd.get_fastastr(pymol_obj_name)
-        seq = "".join(
-            [
-                line if not line.startswith(">") else "/"
-                for line in fastastring.split()[1:]
-            ]
-        )
-
-        outputs.append(PredictionTarget(name, seq, pymol_obj_name, path))
+        outputs.append(PredictionTarget(name, seq, parsed_pdb, path))
 
     return outputs
 
@@ -772,10 +843,10 @@ from alphafold.data import templates
 import collections
 
 
-def af2_get_atom_positions(pymol_object_name) -> Tuple[np.ndarray, np.ndarray]:
+def af2_get_atom_positions(parsed_pdb) -> Tuple[np.ndarray, np.ndarray]:
     """Gets atom positions and mask."""
 
-    lines = pymol.cmd.get_pdbstr(pymol_object_name).splitlines()
+    lines = parsed_pdb.get_pdbstr().splitlines()
 
     # indices of residues observed in the structure
     idx_s = [
@@ -824,16 +895,10 @@ def af2_get_atom_positions(pymol_object_name) -> Tuple[np.ndarray, np.ndarray]:
     return all_positions, all_positions_mask
 
 
-def af2_all_atom_pymol_object_name(pymol_object_name,pad_to=None):
-    template_seq = "".join(
-        [
-            line
-            for line in pymol.cmd.get_fastastr(pymol_object_name).split()
-            if not line.startswith(">")
-        ]
-    )
+def af2_all_atom(parsed_pdb,pad_to=None):
+    template_seq = parsed_pdb.get_seq()
 
-    all_atom_positions, all_atom_mask = af2_get_atom_positions(pymol_object_name)
+    all_atom_positions, all_atom_mask = af2_get_atom_positions(parsed_pdb)
 
     all_atom_positions = np.split(all_atom_positions, all_atom_positions.shape[0])
 
@@ -895,9 +960,8 @@ def mk_mock_template(query_sequence):
 
 #### load up reference pdb, if present
 if args.reference_pdb is not None:
-    reference_pdb_name = "REFERENCE"
-    pymol.cmd.load(args.reference_pdb, reference_pdb_name)
-
+    parsed_pdb_reference = ParsedPDB()
+    parsed_pdb_reference.parse_pdb_file(args.reference_pdb)
 
 ######## initial guess logic ########
 
@@ -913,11 +977,11 @@ if type(args.initial_guess) == bool and args.initial_guess:
 
 #### load up initial guess pdb, if present
 if type(args.initial_guess) == str:
-    initial_guess_name = "INITIAL_GUESS"
-    pymol.cmd.load(args.initial_guess, initial_guess_name)
+    parsed_pdb_initial_guess = ParsedPDB()
+    parsed_pdb_initial_guess.parse_pdb_file(args.initial_guess)
 
     # check that all the provided fasta sequences are the same length
-    initial_guess_length = pymol.cmd.count_atoms(initial_guess_name + " and name CA")
+    initial_guess_length = parsed_pdb_initial_guess.total_length()
     for tgt in query_targets:
         if len(tgt) != initial_guess_length:
             raise ValueError(
@@ -996,10 +1060,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         if not args.initial_guess:  # initial guess is False by default
             initial_guess = None
         elif type(args.initial_guess) == str:  # use the provided pdb
-            initial_guess = af2_all_atom_pymol_object_name("INITIAL_GUESS",pad_to=max_length)
+            initial_guess = af2_all_atom(parsed_pdb_initial_guess,pad_to=max_length)
         else:  # use the target structure
             print("Using target structure as initial guess")
-            initial_guess = af2_all_atom_pymol_object_name(target.pymol_obj_name,pad_to=max_length)
+            initial_guess = af2_all_atom(target.parsed_pdb,pad_to=max_length)
 
         num_res = len(full_sequence)
         feature_dict = {}
@@ -1110,12 +1174,16 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 output_pdbstr = protein.to_pdb(o["unrelaxed_protein"])
 
                 output_pdbstr = convert_pdb_chainbreak_to_new_chain(output_pdbstr)
-                output_pdbstr = renumber(output_pdbstr)
+                parsed_pdb_output = ParsedPDB()
+                parsed_pdb_output.parse_pdbstr(output_pdbstr)
+                parsed_pdb_output.renumber()
+                # output_pdbstr = renumber(output_pdbstr)
 
                 import string
 
                 alphabet = string.ascii_uppercase + string.digits + string.ascii_lowercase
-                chain_range_map = get_chain_range_map(output_pdbstr)
+                #chain_range_map = get_chain_range_map(output_pdbstr)
+                chain_range_map = parsed_pdb_output.get_chain_range_map()
 
                 num_chains = len(chain_range_map)
 
@@ -1128,8 +1196,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     for old_chain, new_chain in zip(alphabet, final_chain_order)
                 }
 
-                output_pymol_name = "temp_target"
-                pymol.cmd.read_pdbstr(output_pdbstr, oname=output_pymol_name)
+                #output_pymol_name = "temp_target"
+                #pymol.cmd.read_pdbstr(output_pdbstr, oname=output_pymol_name)
+
                 if args.reference_pdb is not None:
                     # if args.simple_rmsd:
                     #     rmsd = pymol_align(
@@ -1141,60 +1210,49 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     #         "temp_target", reference_pdb_name, "super"
                     #     )  # use super here b/c sequence is not guaranteed to be very similar
 
-                    rmsd, tmscore, final_chain_order_mapping = pymol_MMalign(output_pymol_name, reference_pdb_name)
+                    rmsd, tmscore, final_chain_order_mapping = MMalign(parsed_pdb_output, parsed_pdb_reference)
+                    parsed_pdb_output.remap_chains(final_chain_order_mapping)
+                    kabsch_rmsd = parsed_pdb_output.rmsd_kabsch(parsed_pdb_reference)
 
-                    out_dict["rmsd_to_reference"] = rmsd
+                    out_dict["mmalign_rmsd_to_reference"] = rmsd
+                    out_dict["kabsch_rmsd_to_reference"] = kabsch_rmsd
                     out_dict["tmscore_to_reference"] = tmscore
 
                     #send this back up for the info-recorder
-                    if target.pymol_obj_name is None:
-                        outs[key]["rmsd_to_input"] = rmsd #bit of a lie
+                    if target.parsed_pdb is None:
+                        outs[key]["mmalign_rmsd_to_input"] = rmsd 
+                        outs[key]["kabsch_rmsd_to_input"] = kabsch_rmsd
                         outs[key]["tmscore_to_input"] = tmscore
 
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
 
-                if target.pymol_obj_name is not None:
-                    ########################################
-                    print("WARNING! THIS CODE NEEDS TO BE REMOVED BUT IS HERE FOR BENCHMARKING PURPOSES")
-                    if args.simple_rmsd:
-                        rmsd = pymol_align(
-                            "temp_target", target.pymol_obj_name
-                        )
-                    else:
+                if target.parsed_pdb is not None:
+                    rmsd, tmscore, final_chain_order_mapping = MMalign(parsed_pdb_output, target.parsed_pdb)
+                    parsed_pdb_output.remap_chains(final_chain_order_mapping)
+                    kabsch_rmsd = parsed_pdb_output.rmsd_kabsch(target.parsed_pdb)
 
-                        # pymol.cmd.read_pdbstr("\n".join(bfactored_pdb_lines),oname='temp_target')
-                        pymol.cmd.read_pdbstr(output_pdbstr, oname="temp_target")
-                        rmsd, output_pdbstr, final_chain_order = pymol_multichain_align(
-                            "temp_target", target.pymol_obj_name
-                        )
-                    ########################################
-                    print("##### OLD RMSD: ", rmsd)
-
-                    rmsd, tmscore, final_chain_order_mapping = pymol_MMalign(output_pymol_name, target.pymol_obj_name)
-                    print("##### NEW RMSD: ", rmsd)
-
-
-                    out_dict["rmsd_to_input"] = rmsd
+                    out_dict["mmalign_rmsd_to_input"] = rmsd
+                    out_dict["kabsch_rmsd_to_input"] = kabsch_rmsd
                     out_dict["tmscore_to_input"] = tmscore
 
                     #send this back up for the info-recorder
-                    outs[key]["rmsd_to_input"] = rmsd
+                    outs[key]["mmalign_rmsd_to_input"] = rmsd
+                    outs[key]["kabsch_rmsd_to_input"] = kabsch_rmsd
                     outs[key]["tmscore_to_input"] = tmscore
 
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_input:{rmsd:0.2f}"
                 
                 #re-extract the per-residue lddt values from the b-factor column of the pdb
-                myspace = {'bfactors': []}
-                pymol.cmd.iterate(output_pymol_name + " and n. CA", 'bfactors.append(b)', space=myspace)
-                plddt_list = myspace['bfactors']
+                plddt_list = parsed_pdb_output.get_bfactors()
                 outs[key]["plddts"] = plddt_list
 
                 # with open(fout_name, "w") as f:
                 #     f.write(output_pdbstr)
-                pymol.cmd.save(fout_name, output_pymol_name)
-                pymol.cmd.delete(output_pymol_name)
+                # pymol.cmd.save(fout_name, output_pymol_name)
+                # pymol.cmd.delete(output_pymol_name)
+                parsed_pdb_output.write_pdb_file(fout_name)
 
                 # TO BE IMPLEMENTED
                 # #compute real per-residue lddts
@@ -1360,9 +1418,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     info_recorder['padded-length'] = max_length
                     info_recorder['seed'] = seed
                     info_recorder['source'] = target.input_path
-                    if target.pymol_obj_name is not None:
+                    if target.parsed_pdb is not None:
                         #get the pdb string of the input structure as pymol has saved it
-                        info_recorder['input-pdb'] = pymol.cmd.get_pdbstr(target.pymol_obj_name)
+                        info_recorder['input-pdb'] = target.parsed_pdb.name
                     info_recorder['model-num'] =  model_name
                     info_recorder['used-msa'] = False
                     info_recorder['used-initial-guess'] = bool(args.initial_guess)
