@@ -6,6 +6,7 @@ IncludeCmd: yes
 
 %files
 /etc/localtime
+/etc/hosts
 /etc/apt/sources.list
 /etc/ssl/certs/ca-certificates.crt
 # /home/cdemakis/apptainer/files/bin/micromamba /opt/micromamba
@@ -22,12 +23,32 @@ ln -s /net /mnt/net
 
 apt-get update
 apt-get install -y libx11-6 libxau6 libxext6 g++ wget tar
-#apt-get install -y git build-essential
+apt-get install -y git build-essential
 #apt-get install -y vim
 
 bash /opt/miniconda.sh -b -u -p /usr
+conda update conda
 rm /opt/miniconda.sh
 rm -rf /usr/lib/terminfo
+
+conda install -p /usr \
+    -c conda-forge \
+    python=3.8 \
+    pip=20.2.4
+
+pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+
+conda install -p /usr \
+    -c pyg \
+    -c pytorch \
+    -c conda-forge \
+    -c bioconda \
+    -c nvidia \
+    cudatoolkit \
+    cudnn \
+    cuda-nvcc \
+    tensorflow \
 
 
 conda install -p /usr \
@@ -41,9 +62,7 @@ conda install -p /usr \
     blas \
     blosc \
     bokeh \
-    cryptography \ 
-    cudatoolkit \ 
-    cudnn \
+    cryptography \
     dataclasses \
     decorator \
     distributed \
@@ -53,8 +72,6 @@ conda install -p /usr \
     ipykernel \
     ipython \
     ipython_genutils \
-    jax \
-    jaxlib=*=*cuda*py38* \
     matplotlib \
     mock \
     more-itertools \
@@ -63,7 +80,6 @@ conda install -p /usr \
     pandoc \
     pip \
     psutil \
-    python=3.8 \
     setuptools \
     tqdm \
     typing-extensions \
