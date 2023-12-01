@@ -301,10 +301,35 @@ def np_kabsch(A,B):
     return rms, rB, R
 
 
-
+# test_pdb_1 = "/home/rdkibler/megahelix.pdb"
+# test_pdb_2 = "/home/rdkibler/1ubq.pdb"
+# test_pdb_3 = "/home/rdkibler/4ncu.pdb"
 
 from collections import defaultdict
 import numpy as np
+
+aa_3to1 = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLU": "E",
+    "GLN": "Q",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+}
 
 class ParsedPDB:
     """
@@ -380,6 +405,14 @@ class ParsedPDB:
         for atom in self.atom_details:
             atom[5] = chain_mapping[atom[5]]
 
+    def get_bfactors(self):
+        #return per-residue b-factors?
+        bfacs = []
+        for atom in self.atom_details:
+            if atom[0] == "ATOM" and atom[2] == " CA ":
+                bfacs.append(atom[6])
+        return np.array(bfacs)
+
     def get_pdbstr(self):
         atom_num = 1
         buffer = ""
@@ -427,7 +460,6 @@ class ParsedPDB:
     def renumber(self):
         previous_resid = None
         new_resid = 0
-        new_atomid = 1
 
         #renumber the residues in the order they appear
         for i,atom in enumerate(self.atom_details):
@@ -444,8 +476,8 @@ class ParsedPDB:
             indices = sorted(indices)
             index_start = indices[0]
             index_stop = indices[-1]
-            resnum_start = self.atom_details[index_start][3]
-            resnum_stop = self.atom_details[index_stop][3]
+            resnum_start = int(self.atom_details[index_start][3])
+            resnum_stop = int(self.atom_details[index_stop][3])
             chain_range_map[chain] = (resnum_start, resnum_stop)
         return chain_range_map
     
@@ -465,7 +497,14 @@ class ParsedPDB:
         #uses kabsch algorithm to superimpose other onto self and returns the rmsd
         #assumes that the two objects have the same number of atoms in the same order
         #the coordinates will NOT be updated
-        rms, rB, R = np_kabsch(self.get_CA_coords(), other.get_CA_coords())
+        self_ca = self.get_CA_coords()
+        other_ca = other.get_CA_coords()
+        # print()
+        # print()
+        # print(self_ca.shape, other_ca.shape)
+        # print()
+        # print()
+        rms, rB, R = np_kabsch(self_ca, other_ca)
         return rms
     
     def get_seq(self):
@@ -477,7 +516,7 @@ class ParsedPDB:
                 seq += "/"
                 prev_chain = atom[5]
             if atom[2] == ' CA ':
-                seq += atom[4]
+                seq += aa_3to1[atom[4]]
         return seq
     
     def total_length(self):
@@ -552,6 +591,37 @@ def MMalign(
 def compute_per_residue_lddt(query_path:str, reference_path:str):
     raise NotImplementedError
 
+
+# parsed_pdb_test_1 = ParsedPDB()
+# parsed_pdb_test_1.parse_pdb_file(test_pdb_1)
+# seq1 = parsed_pdb_test_1.get_seq()
+# assert seq1 == "A" * 50
+
+# parsed_pdb_test_2 = ParsedPDB()
+# parsed_pdb_test_2.parse_pdb_file(test_pdb_2)
+
+# parsed_pdb_test_3 = ParsedPDB()
+# parsed_pdb_test_3.parse_pdb_file(test_pdb_3)
+
+# rmsd, tmscore, chain_order_mapping = MMalign(parsed_pdb_test_1, parsed_pdb_test_2)
+# print(rmsd, tmscore, chain_order_mapping)
+
+# rmsd, tmscore, chain_order_mapping = MMalign(parsed_pdb_test_1, parsed_pdb_test_3)
+# print(rmsd, tmscore, chain_order_mapping)
+
+# rmsd, tmscore, chain_order_mapping = MMalign(parsed_pdb_test_2, parsed_pdb_test_3)
+# print(rmsd, tmscore, chain_order_mapping)
+
+
+# rmsd, tmscore, chain_order_mapping = MMalign(parsed_pdb_test_3, parsed_pdb_test_3)
+# print(rmsd, tmscore, chain_order_mapping)
+# print(parsed_pdb_test_3.rmsd_static(parsed_pdb_test_3))
+# print(parsed_pdb_test_3.rmsd_kabsch(parsed_pdb_test_3))
+
+
+
+
+
 def convert_pdb_chainbreak_to_new_chain(pdbstring):
     previous_resid = 0
     chain_num = 0
@@ -623,10 +693,10 @@ def parse_fasta(path):
 unique_name_counter = 0
 
 
-def get_unique_name():
-    global unique_name_counter
-    unique_name_counter += 1
-    return f"struct{unique_name_counter}"
+# def get_unique_name():
+#     global unique_name_counter
+#     unique_name_counter += 1
+#     return f"struct{unique_name_counter}"
 
 
 def parse_pdb(path):
@@ -896,7 +966,7 @@ def af2_get_atom_positions(parsed_pdb) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def af2_all_atom(parsed_pdb,pad_to=None):
-    template_seq = parsed_pdb.get_seq()
+    template_seq = parsed_pdb.get_seq().replace("/", "")
 
     all_atom_positions, all_atom_mask = af2_get_atom_positions(parsed_pdb)
 
@@ -906,6 +976,7 @@ def af2_all_atom(parsed_pdb,pad_to=None):
 
     # Initially fill will all zero values
     pad_length = pad_to if pad_to is not None else len(template_seq)
+
     assert pad_length >= len(template_seq)
 
     for _ in range(pad_length):
@@ -1214,31 +1285,35 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     parsed_pdb_output.remap_chains(final_chain_order_mapping)
                     kabsch_rmsd = parsed_pdb_output.rmsd_kabsch(parsed_pdb_reference)
 
-                    out_dict["mmalign_rmsd_to_reference"] = rmsd
-                    out_dict["kabsch_rmsd_to_reference"] = kabsch_rmsd
+                    #out_dict["mmalign_rmsd_to_reference"] = rmsd
+                    out_dict["rmsd_to_reference"] = kabsch_rmsd
                     out_dict["tmscore_to_reference"] = tmscore
 
                     #send this back up for the info-recorder
                     if target.parsed_pdb is None:
-                        outs[key]["mmalign_rmsd_to_input"] = rmsd 
-                        outs[key]["kabsch_rmsd_to_input"] = kabsch_rmsd
+                        #outs[key]["mmalign_rmsd_to_input"] = rmsd 
+                        outs[key]["rmsd_to_input"] = kabsch_rmsd
                         outs[key]["tmscore_to_input"] = tmscore
 
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
-
+                
+                parsed_pdb_output.make_pdb_file("TEST_RAW_OUTPUT.pdb")
+                target.parsed_pdb.make_pdb_file("TEST_RAW_TARGET.pdb")
                 if target.parsed_pdb is not None:
+                    
                     rmsd, tmscore, final_chain_order_mapping = MMalign(parsed_pdb_output, target.parsed_pdb)
                     parsed_pdb_output.remap_chains(final_chain_order_mapping)
+                    parsed_pdb_output.make_pdb_file("TEST_REMAPPED_OUTPUT.pdb")
                     kabsch_rmsd = parsed_pdb_output.rmsd_kabsch(target.parsed_pdb)
 
-                    out_dict["mmalign_rmsd_to_input"] = rmsd
-                    out_dict["kabsch_rmsd_to_input"] = kabsch_rmsd
+                    #out_dict["mmalign_rmsd_to_input"] = rmsd
+                    out_dict["rmsd_to_input"] = kabsch_rmsd
                     out_dict["tmscore_to_input"] = tmscore
 
                     #send this back up for the info-recorder
-                    outs[key]["mmalign_rmsd_to_input"] = rmsd
-                    outs[key]["kabsch_rmsd_to_input"] = kabsch_rmsd
+                    #outs[key]["mmalign_rmsd_to_input"] = rmsd
+                    outs[key]["rmsd_to_input"] = kabsch_rmsd
                     outs[key]["tmscore_to_input"] = tmscore
 
                     #pymol.cmd.delete("temp_target")
@@ -1252,7 +1327,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 #     f.write(output_pdbstr)
                 # pymol.cmd.save(fout_name, output_pymol_name)
                 # pymol.cmd.delete(output_pymol_name)
-                parsed_pdb_output.write_pdb_file(fout_name)
+                parsed_pdb_output.make_pdb_file(fout_name)
 
                 # TO BE IMPLEMENTED
                 # #compute real per-residue lddts
@@ -1488,9 +1563,16 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     #info_recorder['LDDT'] = outs[key]['lddts'] #to be implemented
                     info_recorder['num-recycles'] = outs[key]['recycles']
                     info_recorder['pae-matrix'] = outs[key]['pae'].tolist()
-                    if 'rmsd_to_input' in outs[key].keys():
-                        info_recorder['rmsd'] = outs[key]['rmsd_to_input']
+                    # if 'rmsd_to_input' in outs[key].keys():
+                    #     info_recorder['rmsd'] = outs[key]['rmsd_to_input']
+                    #     info_recorder['TMscore'] = outs[key]['tmscore_to_input']
+                    #if "mmalign_rmsd_to_input" in outs[key].keys():
+                    if "rmsd_to_input" in outs[key].keys():
+                        #info_recorder['mmalign_rmsd'] = outs[key]['mmalign_rmsd_to_input']
+                        info_recorder['rmsd'] = outs[key]['kabsch_rmsd_to_input']
                         info_recorder['TMscore'] = outs[key]['tmscore_to_input']
+                    
+
                     info_recorder['pTMscore'] = outs[key]['pTMscore']
 
                     info_recorder.report()

@@ -134,6 +134,7 @@ class InfoCollector(object):
         self._info['num-recycles'] = None
         self._info['pae-matrix'] = None
         self._info['rmsd'] = None
+        self._info['mmalign_rmsd'] = None
         self._info['TMscore'] = None
         self._info['pTMscore'] = None
         self._info['iptm'] = None

@@ -21,36 +21,18 @@ ln -s /projects /mnt/projects
 ln -s /net /mnt/net
 
 apt-get update
-apt-get install -y libx11-6 libxau6 libxext6 libxrender1 libgl1-mesa-glx
+apt-get install -y libx11-6 libxau6 libxext6 g++ wget tar
 #apt-get install -y git build-essential
 #apt-get install -y vim
-apt-get clean
 
-# Download superfold
-apt-get install -y git
-git clone https://github.com/rdkibler/superfold.git /opt/superfold
-
-# Download and link to the alphafold weights
-mkdir -p /opt/weights
-mkdir -p /opt/weights/params
-apt-get install -y wget tar
-wget https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar -P /opt/weights/
-tar -xvf /opt/weights/alphafold_params_2022-12-06.tar -C /opt/weights/params/
-rm /opt/weights/alphafold_params_2022-12-06.tar
-echo /opt/weights/ > /opt/superfold/alphafold_weights.pth
-
-#bash /opt/miniconda.sh -b -u -p /usr
-#rm /opt/miniconda.sh
+bash /opt/miniconda.sh -b -u -p /usr
+rm /opt/miniconda.sh
 rm -rf /usr/lib/terminfo
-export MAMBA_ROOT_PREFIX=/usr
-export MAMBA_EXE="/opt/micromamba";
-eval "$(/opt/micromamba shell hook -s posix)"
-export CONDA_OVERRIDE_CUDA=12
 
-micromamba install -p /usr \
+
+conda install -p /usr \
     -c pyg \
     -c pytorch \
-    -c schrodinger \
     -c dglteam/label/cu117 \
     -c conda-forge \
     -c bioconda \
@@ -67,8 +49,6 @@ micromamba install -p /usr \
     bokeh \
     chex \
     clang-11 \
-    conda \
-    conda-package-handling \
     contextlib2 \
     cryptography \
     cudatoolkit \
@@ -98,7 +78,6 @@ micromamba install -p /usr \
     jax \
     jaxlib=*=*cuda*py38* \
     keras \
-    mamba \
     markdown \
     matplotlib \
     mock \
@@ -126,58 +105,18 @@ micromamba install -p /usr \
     pybind11 \
     pyg=*=*cu* \
     pymatgen \
-    pymol \
-    pymol-bundle \
-    pynvim \
-    pynvml \
     python=3.8 \
-    python-blosc \
-    python-dateutil \
-    python-graphviz \
-    pytorch=*=*cuda*cudnn* \
-    pytorch-cluster=*=*cu* \
-    pytorch-lightning \
-    pytorch-mutex=*=*cu* \
-    pytorch-scatter=*=*cu* \
-    pytorch-sparse=*=*cu* \
-    pytorch-spline-conv=*=*cu* \
-    pytorch-cuda=11.7 \
-    rdkit \
-    regex \
-    requests \
     rsa \
-    ruby \
-    scikit-learn \
-    scipy \
-    send2trash \
     setuptools \
-    simpervisor \
-    sympy \
-    six \
-    statsmodels \
-    tensorboard \
-    tensorboard-data-server \
-    tensorboard-plugin-wit \
     tensorflow \
     tensorflow-estimator \
-    deepmodeling::tensorflow-io-gcs-filesystem \
-    termcolor \
-    toolz \
-    torchaudio=*=*cu* \
-    torchvision=*=*cu* \
     tqdm \
-    traitlets \
-    traittypes \
-    typed-ast \
     typing-extensions \
-    wandb \
     wheel \
-    widgetsnbextension \
     wrapt \
     yt \
     zict \
     omegaconf \
-    hydra-core \
     ipdb \
     deepdiff \
     e3nn \
@@ -186,19 +125,32 @@ micromamba install -p /usr \
     assertpy \
     python-dateutil \
     pyrsistent \
-    mysql-connector-python \
-    pdbfixer \
     cuda-nvcc
 
-
-
-pip install ml-collections
 pip install dm-haiku
 pip install opt_einsum 
 
+# Download superfold
+git clone https://github.com/rdkibler/superfold.git /opt/superfold
+
+#compile mmalign
+here=$(pwd)
+cd /opt/superfold/mmalign
+g++ -static -O3 -ffast-math -lm -o MMalign MMalign.cpp
+cd $here
+
+# Download and link to the alphafold weights
+mkdir -p /opt/weights
+mkdir -p /opt/weights/params
+wget https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar -P /opt/weights/
+tar -xvf /opt/weights/alphafold_params_2022-12-06.tar -C /opt/weights/params/
+rm /opt/weights/alphafold_params_2022-12-06.tar
+echo /opt/weights/ > /opt/superfold/alphafold_weights.pth
 
 # Clean up
-micromamba clean -a -y
+apt-get clean
+#micromamba clean -a -y
+conda clean -a -y
 pip cache purge
 
 %environment 
