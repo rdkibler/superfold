@@ -1569,7 +1569,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     #if "mmalign_rmsd_to_input" in outs[key].keys():
                     if "rmsd_to_input" in outs[key].keys():
                         #info_recorder['mmalign_rmsd'] = outs[key]['mmalign_rmsd_to_input']
-                        info_recorder['rmsd'] = outs[key]['kabsch_rmsd_to_input']
+                        info_recorder['rmsd'] = outs[key]['rmsd_to_input']
                         info_recorder['TMscore'] = outs[key]['tmscore_to_input']
                     
 
