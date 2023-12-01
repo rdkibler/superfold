@@ -8,8 +8,8 @@ IncludeCmd: yes
 /etc/localtime
 /etc/apt/sources.list
 /etc/ssl/certs/ca-certificates.crt
-/home/cdemakis/apptainer/files/bin/micromamba /opt/micromamba
-#/archive/software/Miniconda3-latest-Linux-x86_64.sh /opt/miniconda.sh 
+# /home/cdemakis/apptainer/files/bin/micromamba /opt/micromamba
+/archive/software/Miniconda3-latest-Linux-x86_64.sh /opt/miniconda.sh 
 
 %post
 rm /bin/sh; ln -s /bin/bash /bin/sh
@@ -33,99 +33,45 @@ rm -rf /usr/lib/terminfo
 conda install -p /usr \
     -c pyg \
     -c pytorch \
-    -c dglteam/label/cu117 \
     -c conda-forge \
     -c bioconda \
     -c nvidia \
-    abseil-cpp \
-    absl-py \
-    atk-1.0 \
     attrs \
-    billiard \
-    binutils_impl_linux-64 \
     biopython \
     blas \
     blosc \
     bokeh \
-    chex \
-    clang-11 \
-    contextlib2 \
-    cryptography \
-    cudatoolkit \
+    cryptography \ 
+    cudatoolkit \ 
     cudnn \
     dataclasses \
     decorator \
-    dgl \
-    dglteam::dgl-cuda11.7 \
     distributed \
     dm-tree \
-    flametree \
-    flask \
-    flatbuffers \
-    git \
-    gitpython \
-    graphviz \
     h5py \
-    holoviews \
-    icecream \
     idna \
-    immutabledict \
     ipykernel \
-    ipympl \
     ipython \
     ipython_genutils \
-    isort \
     jax \
     jaxlib=*=*cuda*py38* \
-    keras \
-    markdown \
     matplotlib \
     mock \
     more-itertools \
-    nb_black \
-    nbclassic \
-    nbclient \
-    nbconvert \
-    nbdime \
-    nbformat \
-    numba \
-    numdifftools \
     numpy=1.23.5 \
-    nvidia-apex \
-    openbabel \
-    openmm=7.5.1 \
-    openpyxl \
     pandas \
     pandoc \
-    parallel \
-    perl \
     pip \
-    proglog \
     psutil \
-    pybind11 \
-    pyg=*=*cu* \
-    pymatgen \
     python=3.8 \
-    rsa \
     setuptools \
-    tensorflow \
-    tensorflow-estimator \
     tqdm \
     typing-extensions \
     wheel \
-    wrapt \
-    yt \
     zict \
-    omegaconf \
-    ipdb \
-    deepdiff \
-    e3nn \
-    deepspeed \
     ml-collections \
-    assertpy \
     python-dateutil \
-    pyrsistent \
-    cuda-nvcc
+    pyrsistent 
 
 pip install dm-haiku
 pip install opt_einsum 
