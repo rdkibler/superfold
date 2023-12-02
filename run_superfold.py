@@ -400,10 +400,33 @@ class ParsedPDB:
             pdbstr = f.read()
         self.parse_pdbstr(pdbstr)
 
+    def reorder_records(self):
+        #rearrange the coords and atom_details so they are in chain-sorted order
+        chains = sorted(list(set([atom[5] for atom in self.atom_details])))
+        new_coords = []
+        new_atom_details = []
+
+        coords_by_chain = defaultdict(list)
+        atom_details_by_chain = defaultdict(list)
+        for xyz,atom in zip(self.coords,self.atom_details):
+            coords_by_chain[atom[5]].append(xyz)
+            atom_details_by_chain[atom[5]].append(atom)
+
+        for chain in chains:
+            new_coords.extend(coords_by_chain[chain])
+            new_atom_details.extend(atom_details_by_chain[chain])
+
+        self.coords = np.array(new_coords)
+        self.atom_details = new_atom_details
+
+        self.renumber()
+
     def remap_chains(self, chain_mapping):
         #chain_mapping is a dict of old_chain:new_chain
         for atom in self.atom_details:
             atom[5] = chain_mapping[atom[5]]
+    
+        self.reorder_records()
 
     def get_bfactors(self):
         #return per-residue b-factors?

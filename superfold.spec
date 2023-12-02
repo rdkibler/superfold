@@ -48,7 +48,6 @@ conda install -p /usr \
     cudatoolkit \
     cudnn \
     cuda-nvcc \
-    tensorflow \
 
 
 conda install -p /usr \
@@ -66,7 +65,6 @@ conda install -p /usr \
     dataclasses \
     decorator \
     distributed \
-    dm-tree \
     h5py \
     idna \
     ipykernel \
@@ -82,15 +80,15 @@ conda install -p /usr \
     psutil \
     setuptools \
     tqdm \
+    typing \
     typing-extensions \
     wheel \
     zict \
-    ml-collections \
     python-dateutil \
     pyrsistent 
 
-pip install dm-haiku
-pip install opt_einsum 
+pip install dm-haiku==0.0.4 absl-py dm-tree tensorflow ml-collections opt_einsum
+
 
 # Download superfold
 git clone https://github.com/rdkibler/superfold.git /opt/superfold
