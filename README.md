@@ -30,7 +30,8 @@ of silent_tools, so you could remove the pyrosetta line from the .yml and be fin
 8) `$pip install absl-py dm-tree tensorflow ml-collections`
 9) `$pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_releases.html`
 10) `$pip install dm-haiku 
-11) Compile MMalign
+11) `$cd mmalign`
+12) g++ -static -O3 -ffast-math -lm -o MMalign MMalign.cpp
 
 ### Model parameters
 
