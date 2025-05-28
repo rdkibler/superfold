@@ -162,7 +162,10 @@ software, libraries or code is subject to any such terms and you should check
 that you can comply with any applicable restrictions or terms and conditions
 before use.
 
-
 MM-align (Version 20210816): complex structure alignment           
 References: S Mukherjee, Y Zhang. Nucl Acids Res 37(11):e83 (2009) 
 Please email comments and suggestions to yangzhanglab@umich.edu    
+
+### How to cite
+
+In your methods section, please include a URL to this github repo. In the main text, cite Deepmind (https://www.nature.com/articles/s41586-021-03819-2) and Nate, if you use the initial guess function (https://www.nature.com/articles/s41467-023-38328-5)
