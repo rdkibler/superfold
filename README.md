@@ -11,10 +11,6 @@ need to be published beforehand or concurrently since they constitute novel work
 
 
 
-## Usage
-
-TODO
-
 ## Installation
 
 1) Download this git repo `$git clone git@github.com:rdkibler/superfold.git`
